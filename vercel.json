@@ -1,10 +1,14 @@
 {
-  "functions": {
-    "main.py": {
-      "maxLambdaSize": "45mb",
-      "includeFiles": "src/**"
+  "builds": [
+    {
+      "src": "main.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "45mb",
+        "includeFiles": "src/**"
+      }
     }
-  },
+  ],
   "routes": [
     {
       "src": "/(.*)",
