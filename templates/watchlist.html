@@ -3,13 +3,17 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>管理自選清單 - 獵人 AI 旗艦系統</title>
+    <title>編輯自選清單 - 獵人 AI 旗艦系統</title>
     <style>
         body { font-family: sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 2rem; }
         .container { background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 800px; margin: auto; }
-        h1 { color: #1c2e4a; text-align: center; }
+        h1, h2 { color: #1c2e4a; text-align: center; }
         p { color: #666; }
-        textarea { width: 100%; height: 400px; padding: 1rem; border: 1px solid #ccc; border-radius: 5px; font-family: monospace; font-size: 1rem; line-height: 1.5; }
+        .watchlist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stock-item { background-color: #f8f9fa; padding: 0.8rem; border-radius: 5px; border: 1px solid #dee2e6; }
+        .stock-ticker { font-weight: bold; color: #0056b3; }
+        .stock-name { font-size: 0.9rem; color: #555; }
+        textarea { width: 100%; box-sizing: border-box; height: 300px; padding: 1rem; border: 1px solid #ccc; border-radius: 5px; font-family: monospace; font-size: 1rem; line-height: 1.5; margin-top: 1rem; }
         .button-container { text-align: center; margin-top: 2rem; display: flex; justify-content: center; gap: 1rem; }
         .button { display: inline-block; text-decoration: none; padding: 0.8rem 1.5rem; border: none; border-radius: 5px; transition: background-color 0.3s; font-size: 1.1rem; font-weight: bold; cursor: pointer; }
         .button-primary { background-color: #007bff; color: white; }
@@ -20,13 +24,25 @@
 </head>
 <body>
     <div class="container">
-        <h1>⚙️ 管理我的自選清單</h1>
-        <p>請在此編輯您的自選股代碼，一行一個。以 "#" 開頭的行將會被忽略。</p>
+        <h1>✏️ 編輯我的自選清單</h1>
+        
+        <h2>目前清單 (含中文名稱)</h2>
+        <p>系統已自動為您抓取公司名稱以供參考。您只需在下方的文字框中維護代碼即可。</p>
+        <div class="watchlist-grid">
+            {% for item in ticker_details %}
+            <div class="stock-item">
+                <div class="stock-ticker">{{ item.ticker }}</div>
+                <div class="stock-name">{{ item.name }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <h2>編輯區</h2>
         <form method="post">
-            <textarea name="watchlist_content">{{ content }}</textarea>
+            <textarea name="watchlist_content" placeholder="請在此輸入股票代碼，一行一個...">{{ content }}</textarea>
             <div class="button-container">
-                <button type="submit" class="button button-primary">儲存清單</button>
-                <a href="/" class="button button-secondary">返回主選單</a>
+                <button type="submit" class="button button-primary">儲存更新</button>
+                <a href="/watchlist/select" class="button button-secondary">返回選擇頁</a>
             </div>
         </form>
     </div>

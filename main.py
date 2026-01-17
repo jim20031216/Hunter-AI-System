@@ -200,6 +200,10 @@ def run_analysis(mode):
     
     return render_template('results.html', headers=headers, data=final_table, mode=mode, report_info=report_info, scan_time=scan_time)
 
+@app.route('/watchlist/select')
+def select_watchlist_analysis():
+    return render_template('watchlist_select.html')
+
 @app.route('/watchlist', methods=['GET', 'POST'])
 def manage_watchlist():
     if request.method == 'POST':
@@ -209,8 +213,23 @@ def manage_watchlist():
         return redirect(url_for('manage_watchlist'))
 
     with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
+        tickers = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+
+    ticker_details = []
+    for t in tickers:
+        try:
+            info = yf.Ticker(t).info
+            name = info.get('longName', info.get('shortName', '無法獲取名稱'))
+            ticker_details.append({'ticker': t, 'name': name})
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Could not fetch name for {t}: {e}")
+            ticker_details.append({'ticker': t, 'name': '無法獲取名稱'})
+
+    with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
         content = f.read()
-    return render_template('watchlist.html', content=content)
+
+    return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
 
 @app.route('/download/<mode>')
