@@ -7,3 +7,4 @@ flask
 yfinance
 pandas
 tabulate
+gunicorn
