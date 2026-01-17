@@ -8,3 +8,5 @@ yfinance
 pandas
 tabulate
 gunicorn
+pytz
+twstock

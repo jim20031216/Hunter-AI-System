@@ -6,14 +6,42 @@ import time
 from datetime import datetime
 import numpy as np
 import io
+import pytz # <--- 修正時間
+import twstock # <--- 抓取中文名稱
 
 # ================= Flask App Initialization =================
 app = Flask(__name__)
 
-# ================= 1. Core Files & Sector Logic =================
+# ================= 1. Core Files & Helper Logic =================
 WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
+
+stock_name_cache = {}
+
+def get_stock_name(ticker):
+    if ticker in stock_name_cache:
+        return stock_name_cache[ticker]
+    try:
+        code = ticker.split('.')[0]
+        stock_info = twstock.realtime.get(code)
+        if stock_info and 'info' in stock_info and 'name' in stock_info['info']:
+            name = stock_info['info']['name']
+            stock_name_cache[ticker] = name
+            return name
+    except Exception as e:
+        print(f"Could not fetch name for {ticker} using twstock: {e}")
+    
+    # Fallback to yfinance if twstock fails
+    try:
+        info = yf.Ticker(ticker).info
+        name = info.get('longName', info.get('shortName', ticker))
+        stock_name_cache[ticker] = name
+        return name
+    except Exception as e:
+        print(f"Could not fetch name for {ticker} using yfinance: {e}")
+        stock_name_cache[ticker] = ticker # Cache failure to avoid re-query
+        return ticker
 
 def get_sector_label(t):
     c = t.split('.')[0]
@@ -90,7 +118,12 @@ def analyze_ticker(ticker, mode, cache_df=None):
     is_red = last_p > last['Open']
     signal = "🟢🟢 埋伏" if (is_red and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
 
-    result = {"name": f"{get_sector_label(ticker)}{ticker}", "p": f"{best_p}d", "fit": fit_val,
+    # --- 整合中文名稱 --- #
+    stock_name = get_stock_name(ticker)
+    display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
+    # ------------------ #
+
+    result = {"name": display_name, "p": f"{best_p}d", "fit": fit_val,
                     "price": f"{last_p:.1f}", "target": target_1382, "status": status,
                     "signal": signal, "sector": get_sector_label(ticker)}
     
@@ -114,6 +147,12 @@ def run_stable_hunter(mode='DAILY'):
             continue
     return results
 
+def get_taipei_time_str():
+    utc_now = datetime.now(pytz.utc)
+    taipei_tz = pytz.timezone('Asia/Taipei')
+    taipei_now = utc_now.astimezone(taipei_tz)
+    return taipei_now.strftime('%Y-%m-%d %H:%M:%S')
+
 def run_market_scan():
     with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
@@ -131,7 +170,7 @@ def run_market_scan():
             print(f"Error processing market ticker {t}: {e}")
             continue
             
-    scan_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    scan_time = get_taipei_time_str()
     return results, scan_time
 
 def run_market_backtest():
@@ -158,7 +197,7 @@ def run_market_backtest():
             continue
             
     results.sort(key=lambda r: float(r['fit'].replace('%', '')), reverse=True)
-    scan_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    scan_time = get_taipei_time_str()
     return results, scan_time
 
 def generate_final_table(data):
@@ -217,24 +256,16 @@ def manage_watchlist():
 
     ticker_details = []
     for t in tickers:
-        try:
-            info = yf.Ticker(t).info
-            name = info.get('longName', info.get('shortName', '無法獲取名稱'))
-            ticker_details.append({'ticker': t, 'name': name})
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Could not fetch name for {t}: {e}")
-            ticker_details.append({'ticker': t, 'name': '無法獲取名稱'})
+        name = get_stock_name(t)
+        ticker_details.append({'ticker': t, 'name': name})
 
     with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
         content = f.read()
 
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
-
 @app.route('/download/<mode>')
 def download_report(mode):
-    # (Download logic remains the same)
     mode = mode.upper()
     data = []
     if mode == 'MARKET':
@@ -254,7 +285,7 @@ def download_report(mode):
     df.to_csv(output, index=False, encoding='utf-8-sig')
     csv_data = output.getvalue()
     
-    timestamp = datetime.now().strftime('%Y%m%d')
+    timestamp = get_taipei_time_str().split(' ')[0].replace('-','')
     filename = f"analysis_report_{mode.lower()}_{timestamp}.csv"
     
     return Response(
