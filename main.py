@@ -6,8 +6,6 @@ import time
 from datetime import datetime
 import numpy as np
 import io
-import pytz
-import twstock
 import logging
 
 # ================= Logging Setup =================
@@ -21,27 +19,13 @@ WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-stock_name_cache = {}
-
+# Fallback: Simple name fetching
 def get_stock_name(ticker):
-    if ticker in stock_name_cache: return stock_name_cache[ticker]
-    try:
-        code = ticker.split('.')[0]
-        stock_info = twstock.realtime.get(code)
-        if stock_info and 'info' in stock_info and 'name' in stock_info['info']:
-            name = stock_info['info']['name']
-            stock_name_cache[ticker] = name
-            return name
-    except Exception as e:
-        logging.warning(f"Could not fetch name for {ticker} using twstock: {e}")
     try:
         info = yf.Ticker(ticker).info
-        name = info.get('longName', info.get('shortName', ticker))
-        stock_name_cache[ticker] = name
-        return name
+        return info.get('longName', info.get('shortName', ticker))
     except Exception as e:
         logging.error(f"Could not fetch name for {ticker} using yfinance: {e}")
-        stock_name_cache[ticker] = ticker
         return ticker
 
 def get_sector_label(t):
@@ -78,7 +62,7 @@ def analyze_ticker(ticker, mode, cache_df=None):
                 if not last_buy_idx.empty:
                     last_buy_date = last_buy_idx[-1]
                     last_sell_date = df_strat[df_strat['signal_change'] == -1].index
-                    last_sell_date = last_sell_date[-1] if not last_sell_date.empty else pd.Timestamp.min.tz_localize(df.index.tz)
+                    last_sell_date = last_sell_date[-1] if not last_sell_date.empty else pd.Timestamp.min # No timezone info needed
                     if last_buy_date > last_sell_date:
                         entry_price_open = df_strat.loc[last_buy_date, 'Close']
                         exit_price_open = df_strat['Close'].iloc[-1]
@@ -104,17 +88,9 @@ def analyze_ticker(ticker, mode, cache_df=None):
     result = {"name": display_name, "p": f"{best_p}d", "fit": fit_val, "price": f"{last_p:.1f}", "target": target_1382, "status": status, "signal": signal, "sector": get_sector_label(ticker)}
     return result, new_cache_entry
 
+# Fallback: Simple time string
 def get_taipei_time_str():
-    try:
-        utc_now = datetime.now(pytz.utc)
-        taipei_tz = pytz.timezone('Asia/Taipei')
-        taipei_now = utc_now.astimezone(taipei_tz)
-        time_str = taipei_now.strftime('%Y-%m-%d %H:%M:%S')
-        logging.info(f"Generated Taipei time: {time_str}")
-        return time_str
-    except Exception as e:
-        logging.error(f"Error generating Taipei time: {e}")
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 def update_cache_file(new_cache, cache_df):
     if not new_cache: return
