@@ -1,28 +1,24 @@
+# Taiwan Market Scan List - For Hunter AI System
+
+# AI核心 / Core AI
+2330.TW # 台積電
+2454.TW # 聯發科
+2317.TW # 鴻海
+3017.TW # 奇鋐
+
+# 重電 / Heavy Electrical
+1513.TW # 中興電
+1519.TW # 華城
+1503.TW # 士電
+
+# 記憶體 / Memory
+3260.TWO # 威剛
+2408.TW # 南亞科
+8299.TW # 群聯
+
+# 面板 / Display Panel
+3481.TW # 群創
+2409.TW # 友達
+
+# 加權指數 (觀察大盤)
 ^TWII
-2330.TW
-2317.TW
-2454.TW
-2382.TW
-2308.TW
-2881.TW
-2882.TW
-1301.TW
-1303.TW
-2002.TW
-3008.TW
-3481.TW
-2409.TW
-3260.TWO
-2408.TW
-1513.TW
-1519.TW
-3017.TW
-6505.TW
-2303.TW
-2379.TW
-2891.TW
-2886.TW
-5880.TW
-2412.TW
-3045.TW
-4904.TW
