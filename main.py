@@ -136,7 +136,7 @@ def run_analysis_route(mode):
                     try:
                         if float(result['fit'].replace('%','')) > 0: results.append(result)
                     except (ValueError, TypeError): continue
-                elif mode == 'MARKET' and result['status'] == "✅強勢": results.append(result)
+                elif mode == 'MARKET': results.append(result)
                 elif mode in ['DAILY', 'WEEKLY']: results.append(result)
             if cache_entry: new_cache.append(cache_entry)
             time.sleep(0.25)
