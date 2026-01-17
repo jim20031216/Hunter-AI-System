@@ -148,16 +148,10 @@ def run_analysis_route(mode):
                       "price": f"{last_p:.1f}", "target": target_1382, "status": status,
                       "signal": signal, "sector": get_sector_label(ticker)}
             
-            # FINAL, CORRECTED LOGIC: 100% faithful to V.FINAL.ULTRA. NO MORE FILTERING.
+            # FINAL, ULTIMATE, CORRECTED LOGIC: As per your precedent file,
+            # NO filtering should be applied here. All results are appended and sorted later.
             if result:
-                if mode == 'MARKET_BACKTEST':
-                    try:
-                        if float(result['fit'].replace('%','')) > 0:
-                            results.append(result)
-                    except (ValueError, TypeError):
-                        continue
-                else: # For MARKET, DAILY, WEEKLY -> Show ALL results. The filter is REMOVED.
-                    results.append(result)
+                results.append(result)
             
             time.sleep(0.25)
         except Exception as e:
@@ -171,8 +165,10 @@ def run_analysis_route(mode):
         updated_cache_df.to_csv(GENE_CACHE_FILE)
         logging.info(f"Gene cache updated with {len(new_cache)} entries.")
 
+    # The sorting for MARKET_BACKTEST is still needed as per your original logic.
+    # This part remains correct.
     if mode == 'MARKET_BACKTEST':
-        results.sort(key=lambda r: float(r['fit'].replace('%','')), reverse=True)
+        results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r['fit'] and r['fit'] != 'N/A' else -9999, reverse=True)
 
     buys = [r['sector'] for r in results if r['signal'] == "🟢🟢 埋伏" and r['sector'] != "[熱門]"]
     final_table = []
