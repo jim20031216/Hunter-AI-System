@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 import io
 import logging
+import twstock
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,14 +20,27 @@ WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-# Fallback: Simple name fetching
+# Secure and multi-layered stock name fetching
 def get_stock_name(ticker):
+    # Layer 1: Try twstock for the most accurate Chinese name
+    try:
+        stock_code = ticker.split('.')[0]
+        stock = twstock.codes.get(stock_code)
+        if stock:
+            return stock.name
+        # If not found in twstock, fall through to the next layer
+    except Exception as e:
+        logging.warning(f"twstock lookup failed for {ticker}: {e}. Falling back to yfinance.")
+
+    # Layer 2: Fallback to yfinance if twstock fails or doesn't have the ticker
     try:
         info = yf.Ticker(ticker).info
         return info.get('longName', info.get('shortName', ticker))
     except Exception as e:
-        logging.error(f"Could not fetch name for {ticker} using yfinance: {e}")
-        return ticker
+        logging.error(f"yfinance fallback also failed for {ticker}: {e}. Returning original ticker as last resort.")
+    
+    # Layer 3: Absolute failsafe
+    return ticker
 
 def get_sector_label(t):
     c = t.split('.')[0]
