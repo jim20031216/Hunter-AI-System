@@ -8,7 +8,6 @@ import numpy as np
 import io
 import logging
 import twstock
-import pytz
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,7 +28,6 @@ def get_stock_name(ticker):
         stock = twstock.codes.get(stock_code)
         if stock:
             return stock.name
-        # If not found in twstock, fall through to the next layer
     except Exception as e:
         logging.warning(f"twstock lookup failed for {ticker}: {e}. Falling back to yfinance.")
 
@@ -52,8 +50,15 @@ def get_sector_label(t):
     return "[熱門]"
 
 def analyze_ticker(ticker, mode, cache_df=None):
-    df = yf.download(ticker, period="60d" if mode != 'WEEKLY' else "5y", progress=False, auto_adjust=True, timeout=10)
-    if df.empty: return None, None
+    try:
+        df = yf.download(ticker, period="60d" if mode != 'WEEKLY' else "5y", progress=False, auto_adjust=True, timeout=10)
+        if df.empty:
+            logging.warning(f"No data downloaded for {ticker}. Skipping.")
+            return None, None
+    except Exception as e:
+        logging.error(f"yfinance download failed for {ticker}: {e}")
+        return None, None
+        
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
     last = df.iloc[-1]
@@ -67,6 +72,7 @@ def analyze_ticker(ticker, mode, cache_df=None):
         for p in [10, 20, 60]:
             df_strat = df[['Close']].copy()
             df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
+            if df_strat.empty or 'ma' not in df_strat.columns or df_strat['ma'].isnull().all(): continue
             df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
             df_strat['signal_change'] = df_strat['above_ma'].diff()
             df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
@@ -77,13 +83,14 @@ def analyze_ticker(ticker, mode, cache_df=None):
                 if not last_buy_idx.empty:
                     last_buy_date = last_buy_idx[-1]
                     last_sell_date = df_strat[df_strat['signal_change'] == -1].index
-                    last_sell_date = last_sell_date[-1] if not last_sell_date.empty else pd.Timestamp.min # No timezone info needed
+                    last_sell_date = last_sell_date[-1] if not last_sell_date.empty else pd.Timestamp.min
                     if last_buy_date > last_sell_date:
                         entry_price_open = df_strat.loc[last_buy_date, 'Close']
                         exit_price_open = df_strat['Close'].iloc[-1]
                         if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
             current_capital = 100.0 * np.prod([1 + p for p in trade_profits_pct])
             battle.append((p, current_capital))
+        if not battle: return None, None
         best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
         fit_val = f"{f_raw-100:.1f}%"
         new_cache_entry = {'ticker': ticker, 'best_p': best_p, 'fit': fit_val}
@@ -103,16 +110,9 @@ def analyze_ticker(ticker, mode, cache_df=None):
     result = {"name": display_name, "p": f"{best_p}d", "fit": fit_val, "price": f"{last_p:.1f}", "target": target_1382, "status": status, "signal": signal, "sector": get_sector_label(ticker)}
     return result, new_cache_entry
 
-# Secure Taipei time fetching with fallback
-def get_taipei_time_str():
-    try:
-        taipei_tz = pytz.timezone('Asia/Taipei')
-        now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
-        now_taipei = now_utc.astimezone(taipei_tz)
-        return now_taipei.strftime('%Y-%m-%d %H:%M:%S %Z')
-    except Exception as e:
-        logging.warning(f"pytz lookup for Taipei time failed: {e}. Falling back to server time.")
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S (Local)')
+# Simplified date string function
+def get_scan_date_str():
+    return datetime.now().strftime('%Y-%m-%d')
 
 def update_cache_file(new_cache, cache_df):
     if not new_cache: return
@@ -140,7 +140,7 @@ def index():
 @app.route('/run/<mode>')
 def run_analysis_route(mode):
     mode = mode.upper()
-    scan_time = get_taipei_time_str()
+    scan_time = get_scan_date_str()
     list_file = MARKET_SCAN_LIST_FILE if mode.startswith('MARKET') else WATCHLIST_FILE
     with open(list_file, "r", encoding="utf-8") as f: targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     try:
@@ -151,25 +151,35 @@ def run_analysis_route(mode):
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
     results, new_cache = [], []
     for ticker in targets:
-        try:
-            result, cache_entry = analyze_ticker(ticker, analysis_mode, cache_df)
-            if result:
-                if mode == 'MARKET_BACKTEST':
-                    try:
-                        if float(result['fit'].replace('%','')) > 0: results.append(result)
-                    except (ValueError, TypeError): continue
-                elif mode == 'MARKET': results.append(result)
-                elif mode in ['DAILY', 'WEEKLY']: results.append(result)
-            if cache_entry: new_cache.append(cache_entry)
-            time.sleep(0.25)
-        except Exception as e:
-            logging.error(f"Error processing ticker {ticker} in {mode}: {e}")
-            continue
+        result, cache_entry = analyze_ticker(ticker, analysis_mode, cache_df)
+        if result:
+            if mode == 'MARKET_BACKTEST':
+                try:
+                    if float(result['fit'].replace('%','')) > 0: results.append(result)
+                except (ValueError, TypeError): continue
+            elif mode == 'MARKET':
+                if result['status'] == "✅強勢":
+                    results.append(result)
+            elif mode in ['DAILY', 'WEEKLY']:
+                results.append(result)
+        if cache_entry: new_cache.append(cache_entry)
+        # Removed time.sleep to speed up testing since yfinance is failing
+
     if new_cache: update_cache_file(new_cache, cache_df)
     if mode == 'MARKET_BACKTEST': results.sort(key=lambda r: float(r['fit'].replace('%','')), reverse=True)
-    final_table = generate_final_table(results)
+    
+    report_info = ""
+    final_table = []
+    if not results:
+        report_info = "資料下載失敗，無法產生報告。請稍後再試或檢查伺服器連線。"
+        # Force a single row in the table to display the error message
+        final_table.append([report_info, "", "", "", "", "", "", ""])
+    else:
+        final_table = generate_final_table(results)
+        if analysis_mode == 'WEEKLY':
+            report_info = "每週分析完成，基因快取已更新。"
+
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
-    report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
     return render_template('results.html', headers=headers, data=final_table, mode=mode, report_info=report_info, scan_time=scan_time)
 
 @app.route('/watchlist/select')
@@ -182,7 +192,15 @@ def manage_watchlist():
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(request.form['watchlist_content'])
         return redirect(url_for('manage_watchlist'))
     with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: tickers = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    ticker_details = [{'ticker': t, 'name': get_stock_name(t)} for t in tickers]
+    ticker_details = []
+    for t in tickers:
+        # Since yfinance is failing, we provide a fallback name to avoid more errors
+        try:
+            name = get_stock_name(t)
+        except:
+            name = t # fallback to ticker
+        ticker_details.append({'ticker': t, 'name': name})
+
     with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
