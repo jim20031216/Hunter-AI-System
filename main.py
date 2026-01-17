@@ -8,6 +8,7 @@ import numpy as np
 import io
 import logging
 import twstock
+import pytz
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -102,9 +103,16 @@ def analyze_ticker(ticker, mode, cache_df=None):
     result = {"name": display_name, "p": f"{best_p}d", "fit": fit_val, "price": f"{last_p:.1f}", "target": target_1382, "status": status, "signal": signal, "sector": get_sector_label(ticker)}
     return result, new_cache_entry
 
-# Fallback: Simple time string
+# Secure Taipei time fetching with fallback
 def get_taipei_time_str():
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        taipei_tz = pytz.timezone('Asia/Taipei')
+        now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+        now_taipei = now_utc.astimezone(taipei_tz)
+        return now_taipei.strftime('%Y-%m-%d %H:%M:%S %Z')
+    except Exception as e:
+        logging.warning(f"pytz lookup for Taipei time failed: {e}. Falling back to server time.")
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S (Local)')
 
 def update_cache_file(new_cache, cache_df):
     if not new_cache: return
