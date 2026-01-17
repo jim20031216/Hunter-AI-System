@@ -8,6 +8,7 @@
         body { font-family: sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 2rem; }
         .container { background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin: auto; }
         h1 { color: #1c2e4a; text-align: center; }
+        .scan-time { text-align: center; color: #555; font-size: 1rem; margin-top: -1rem; margin-bottom: 1rem; }
         .report-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #d9534f; }
         .button-container { text-align: center; margin-top: 2rem; }
         .button { display: inline-block; text-decoration: none; padding: 0.8rem 1.5rem; background-color: #007bff; color: white; border-radius: 5px; transition: background-color 0.3s; margin: 0 0.5rem; }
@@ -26,8 +27,15 @@
 <body>
     <div class="container">
         <h1>
-            {% if mode == 'DAILY' %}🔥 平日短線快掃結果{% else %}🏥 每週全面分析結果{% endif %}
+            {% if mode == 'DAILY' %}🔥 平日短線快掃結果 (自選股)
+            {% elif mode == 'MARKET' %}📡 平日市場掃描結果 (強勢股)
+            {% else %}🏥 每週全面分析結果 (自選股)
+            {% endif %}
         </h1>
+
+        {% if scan_time %}
+            <p class="scan-time">掃描時間：{{ scan_time }}</p>
+        {% endif %}
 
         {% if report_info %}
             <p class="report-info">{{ report_info }}</p>
@@ -54,8 +62,6 @@
 
         <div class="button-container">
             <a href="/" class="button button-secondary">返回主選單</a>
-            <a href="/run/daily" class="button">重新 DAILY 分析</a>
-            <a href="/run/weekly" class="button">重新 WEEKLY 分析</a>
             <a href="/download/{{ mode.lower() }}" class="button button-success">下載分析報告 (CSV)</a>
         </div>
     </div>

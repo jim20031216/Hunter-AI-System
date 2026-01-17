@@ -14,6 +14,8 @@
         .btn { display: block; text-decoration: none; padding: 1rem; border-radius: 5px; font-size: 1.1rem; font-weight: bold; color: #fff; transition: background-color 0.3s; }
         .btn-daily { background-color: #007bff; }
         .btn-daily:hover { background-color: #0056b3; }
+        .btn-market { background-color: #ffc107; color: #333; }
+        .btn-market:hover { background-color: #e0a800; }
         .btn-weekly { background-color: #28a745; }
         .btn-weekly:hover { background-color: #1e7e34; }
     </style>
@@ -23,8 +25,9 @@
         <h1>🏛️ 2026 獵人 AI 旗艦系統</h1>
         <p>請選擇您要執行的分析模式。分析需要一些時間，請耐心等候。</p>
         <div class="btn-container">
-            <a href="/run/DAILY" class="btn btn-daily">🔥 平日短線快掃</a>
-            <a href="/run/WEEKLY" class="btn btn-weekly">🏥 每週全面分析</a>
+            <a href="/run/DAILY" class="btn btn-daily">🔥 平日短線快掃 (自選股)</a>
+            <a href="/run/MARKET" class="btn btn-market">📡 平日市場掃描 (強勢股)</a>
+            <a href="/run/WEEKLY" class="btn btn-weekly">🏥 每週全面分析 (自選股)</a>
         </div>
     </div>
 </body>
