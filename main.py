@@ -21,7 +21,7 @@ WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-# Secure and multi-layered stock name fetching (Retained from previous robust version)
+# Secure and multi-layered stock name fetching
 def get_stock_name(ticker):
     try:
         stock_code = ticker.split('.')[0]
@@ -37,7 +37,7 @@ def get_stock_name(ticker):
         logging.error(f"yfinance fallback also failed for {ticker}: {e}. Returning original ticker.")
     return ticker
 
-# Secure Taipei time fetching with fallback (Retained from previous robust version)
+# Secure Taipei time fetching with fallback
 def get_taipei_time_str():
     try:
         taipei_tz = pytz.timezone('Asia/Taipei')
@@ -59,7 +59,6 @@ def get_sector_label(t):
 
 # init_system logic from your V.FINAL.ULTRA
 def init_system_files():
-    # Use the market scan list as the default for initialization
     if not os.path.exists(MARKET_SCAN_LIST_FILE):
         default_list = ["^TWII", "3481.TW", "2409.TW", "3260.TWO", "2408.TW", "1513.TW", "1519.TW", "2330.TW", "2317.TW", "3017.TW", "2454.TW"]
         with open(MARKET_SCAN_LIST_FILE, "w", encoding="utf-8") as f:
@@ -73,16 +72,13 @@ def index():
 
 @app.route('/run/<mode>')
 def run_analysis_route(mode):
-    # This is the new core, directly implementing your V.FINAL.ULTRA logic
     init_system_files()
     mode = mode.upper()
     scan_time = get_taipei_time_str()
 
-    # Determine which list to use
     is_market_scan = mode.startswith('MARKET')
     list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
     
-    # Ensure watchlist exists if it's selected
     if not is_market_scan and not os.path.exists(WATCHLIST_FILE):
          with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
              f.write("# 請在此輸入您的自選股，一行一檔，例如：\n# 2330.TW\n# 0050.TW")
@@ -152,29 +148,24 @@ def run_analysis_route(mode):
                       "price": f"{last_p:.1f}", "target": target_1382, "status": status,
                       "signal": signal, "sector": get_sector_label(ticker)}
             
-            # This is the critical filter you pointed out was missing
-            if mode == 'MARKET':
-                if result['status'] == "✅強勢":
+            # FINAL, CORRECTED LOGIC: 100% faithful to V.FINAL.ULTRA. NO MORE FILTERING.
+            if result:
+                if mode == 'MARKET_BACKTEST':
+                    try:
+                        if float(result['fit'].replace('%','')) > 0:
+                            results.append(result)
+                    except (ValueError, TypeError):
+                        continue
+                else: # For MARKET, DAILY, WEEKLY -> Show ALL results. The filter is REMOVED.
                     results.append(result)
-            elif mode == 'MARKET_BACKTEST':
-                try:
-                    if float(result['fit'].replace('%','')) > 0:
-                        results.append(result)
-                except (ValueError, TypeError):
-                    continue
-            else: # DAILY, WEEKLY (for watchlist)
-                results.append(result)
             
             time.sleep(0.25)
         except Exception as e:
             logging.error(f"Error processing ticker {ticker} in {mode}: {e}")
             continue
     
-    # Update cache if weekly analysis was run
     if new_cache:
         new_df = pd.DataFrame(new_cache).set_index('ticker')
-        # Combine old and new, preferring new
-        # Use concat and drop duplicates, keeping the last one
         combined_df = pd.concat([cache_df, new_df])
         updated_cache_df = combined_df[~combined_df.index.duplicated(keep='last')]
         updated_cache_df.to_csv(GENE_CACHE_FILE)
@@ -183,7 +174,6 @@ def run_analysis_route(mode):
     if mode == 'MARKET_BACKTEST':
         results.sort(key=lambda r: float(r['fit'].replace('%','')), reverse=True)
 
-    # Final table generation, from your V.FINAL.ULTRA
     buys = [r['sector'] for r in results if r['signal'] == "🟢🟢 埋伏" and r['sector'] != "[熱門]"]
     final_table = []
     for r in results:
@@ -222,7 +212,6 @@ def manage_watchlist():
 
 @app.route('/download/<mode>')
 def download_report(mode):
-    # This functionality can be properly implemented next
     return Response("Download functionality is under construction.", mimetype="text/plain")
 
 if __name__ == '__main__':
