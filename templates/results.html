@@ -9,14 +9,15 @@
         .container { background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin: auto; }
         h1 { color: #1c2e4a; text-align: center; }
         .scan-time { text-align: center; color: #555; font-size: 1rem; margin-top: -1rem; margin-bottom: 1rem; }
-        .report-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #d9534f; }
-        .button-container { text-align: center; margin-top: 2rem; }
-        .button { display: inline-block; text-decoration: none; padding: 0.8rem 1.5rem; background-color: #007bff; color: white; border-radius: 5px; transition: background-color 0.3s; margin: 0 0.5rem; }
-        .button:hover { background-color: #0056b3; }
-        .button-secondary { background-color: #6c757d; }
+        .report-info, .action-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #d9534f; }
+        .button-container { text-align: center; margin-top: 2rem; margin-bottom: 2rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem; }
+        .button { display: inline-block; text-decoration: none; padding: 0.8rem 1.5rem; border: none; border-radius: 5px; transition: background-color 0.3s; font-size: 1rem; font-weight: bold; cursor: pointer; }
+        .button-secondary { background-color: #6c757d; color: white; }
         .button-secondary:hover { background-color: #5a6268; }
-        .button-success { background-color: #28a745; }
+        .button-success { background-color: #28a745; color: white; font-size: 1.2rem; padding: 1rem 2rem; }
         .button-success:hover { background-color: #218838; }
+        .button-download { background-color: #17a2b8; color: white; }
+        .button-download:hover { background-color: #117a8b; }
         table { border-collapse: collapse; width: 100%; margin-top: 2rem; }
         th, td { border: 1px solid #ddd; padding: 0.8rem; text-align: left; }
         th { background-color: #007bff; color: white; }
@@ -27,14 +28,22 @@
 <body>
     <div class="container">
         <h1>
-            {% if mode == 'DAILY' %}🔥 平日短線快掃結果 (自選股)
-            {% elif mode == 'MARKET' %}📡 平日市場掃描結果 (強勢股)
-            {% else %}🏥 每週全面分析結果 (自選股)
+            {% if mode == 'MARKET' %}📡 市場即時掃描結果 (強勢股)
+            {% elif mode == 'MARKET_BACKTEST' %}🧠 市場潛力股回測結果
+            {% elif mode == 'DAILY' %}🔥 自選股每日追蹤
+            {% else %}🏥 自選股策略回測
             {% endif %}
         </h1>
 
         {% if scan_time %}
             <p class="scan-time">掃描時間：{{ scan_time }}</p>
+        {% endif %}
+
+        {% if mode == 'MARKET' %}
+            <div class="button-container">
+                <a href="/run/MARKET_BACKTEST" class="button button-success">🧠 對以上強勢股進行深度回測</a>
+            </div>
+            <p class="action-info">注意：深度回測將對清單上所有股票進行5年數據分析，過程將耗費數分鐘，請耐心等候。</p>
         {% endif %}
 
         {% if report_info %}
@@ -62,7 +71,7 @@
 
         <div class="button-container">
             <a href="/" class="button button-secondary">返回主選單</a>
-            <a href="/download/{{ mode.lower() }}" class="button button-success">下載分析報告 (CSV)</a>
+            <a href="/download/{{ mode.lower() }}" class="button button-download">下載分析報告 (CSV)</a>
         </div>
     </div>
 </body>

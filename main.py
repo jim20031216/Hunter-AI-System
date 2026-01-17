@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, Response
+from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
 import os
@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 # ================= 1. Core Files & Sector Logic =================
 WATCHLIST_FILE = "src/我的自選清單.txt"
-MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt" # New file for market scan
+MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
 def get_sector_label(t):
@@ -25,9 +25,6 @@ def get_sector_label(t):
 
 # ================= 2. Core Analysis Engine =================
 def analyze_ticker(ticker, mode, cache_df=None):
-    """
-    Analyzes a single ticker. Extracted for reusability.
-    """
     df = yf.download(ticker, period="60d" if mode != 'WEEKLY' else "5y", progress=False, auto_adjust=True, timeout=10)
     if df.empty: return None, None
 
@@ -42,7 +39,6 @@ def analyze_ticker(ticker, mode, cache_df=None):
     if mode == 'WEEKLY':
         battle = []
         for p in [10, 20, 60]:
-            # (Weekly analysis logic remains the same...)
             df_strat = df[['Close']].copy()
             df_strat['ma'] = df_strat['Close'].rolling(p).mean()
             df_strat = df_strat.dropna()
@@ -82,7 +78,7 @@ def analyze_ticker(ticker, mode, cache_df=None):
         best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
         fit_val = f"{f_raw-100:.1f}%"
         new_cache_entry = {'ticker': ticker, 'best_p': best_p, 'fit': fit_val}
-    else: # DAILY or MARKET mode
+    else:
         if cache_df is not None and ticker in cache_df.index:
             best_p = int(cache_df.loc[ticker, 'best_p'])
             fit_val = cache_df.loc[ticker, 'fit']
@@ -110,20 +106,15 @@ def run_stable_hunter(mode='DAILY'):
     for t in targets:
         try:
             result, cache_entry = analyze_ticker(t, mode, cache_df)
-            if result:
-                results.append(result)
-            if cache_entry:
-                new_cache.append(cache_entry)
+            if result: results.append(result)
+            if cache_entry: new_cache.append(cache_entry)
             time.sleep(0.5)
         except Exception as e:
             print(f"Error processing watchlist ticker {t}: {e}")
             continue
-
-    # Removed writing to GENE_CACHE_FILE for Vercel compatibility
-    # if mode == 'WEEKLY': pd.DataFrame(new_cache).to_csv(GENE_CACHE_FILE, index=False)
     return results
 
-def run_market_scan(): # New function for market scanning
+def run_market_scan():
     with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
         
@@ -132,16 +123,41 @@ def run_market_scan(): # New function for market scanning
     
     for t in targets:
         try:
-            # We always use 'DAILY' equivalent logic for market scan
             result, _ = analyze_ticker(t, 'DAILY', cache_df)
-            # The key difference: only include strong stocks
             if result and result['status'] == "✅強勢":
                 results.append(result)
-            time.sleep(0.5) # Keep the delay to be nice to the API
+            time.sleep(0.5)
         except Exception as e:
             print(f"Error processing market ticker {t}: {e}")
             continue
             
+    scan_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return results, scan_time
+
+def run_market_backtest():
+    with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
+        targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    
+    results, new_cache = [], []
+    cache_df = pd.read_csv(GENE_CACHE_FILE).set_index('ticker')
+    
+    for t in targets:
+        try:
+            result, cache_entry = analyze_ticker(t, 'WEEKLY', cache_df)
+            if result:
+                try:
+                    fit_value = float(result['fit'].replace('%', ''))
+                    if fit_value > 0:
+                        results.append(result)
+                except (ValueError, TypeError):
+                    continue
+            if cache_entry: new_cache.append(cache_entry)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error processing market backtest for {t}: {e}")
+            continue
+            
+    results.sort(key=lambda r: float(r['fit'].replace('%', '')), reverse=True)
     scan_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return results, scan_time
 
@@ -163,38 +179,55 @@ def index():
 @app.route('/run/<mode>')
 def run_analysis(mode):
     mode = mode.upper()
-    scan_time = None # Initialize scan_time
+    scan_time = None
+    data = []
 
     if mode == 'MARKET':
         data, scan_time = run_market_scan()
+    elif mode == 'MARKET_BACKTEST':
+        data, scan_time = run_market_backtest()
     elif mode in ['DAILY', 'WEEKLY']:
         data = run_stable_hunter(mode=mode)
     else:
         return redirect(url_for('index'))
 
     final_table = generate_final_table(data)
-
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     
     report_info = ""
     if mode == 'WEEKLY':
-        report_info = "每週分析無法在雲端版更新基因快取檔案，建議在本機執行。"
+        report_info = "每週分析建議在本機執行，以更新基因快取檔案。"
     
     return render_template('results.html', headers=headers, data=final_table, mode=mode, report_info=report_info, scan_time=scan_time)
 
+@app.route('/watchlist', methods=['GET', 'POST'])
+def manage_watchlist():
+    if request.method == 'POST':
+        new_content = request.form['watchlist_content']
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return redirect(url_for('manage_watchlist'))
+
+    with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return render_template('watchlist.html', content=content)
+
+
 @app.route('/download/<mode>')
 def download_report(mode):
+    # (Download logic remains the same)
     mode = mode.upper()
-    
+    data = []
     if mode == 'MARKET':
         data, _ = run_market_scan()
+    elif mode == 'MARKET_BACKTEST':
+        data, _ = run_market_backtest()
     elif mode in ['DAILY', 'WEEKLY']:
         data = run_stable_hunter(mode=mode)
     else:
         return "Invalid mode", 400
 
     final_table = generate_final_table(data)
-    
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     df = pd.DataFrame(final_table, columns=headers)
     
@@ -210,7 +243,6 @@ def download_report(mode):
         mimetype="text/csv",
         headers={"Content-disposition":
                  f"attachment; filename={filename}"})
-
 
 # ================= Main Entry Point for Web Server =================
 if __name__ == '__main__':
