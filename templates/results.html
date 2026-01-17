@@ -8,14 +8,19 @@
         body { font-family: sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 2rem; }
         .container { background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin: auto; }
         h1 { color: #1c2e4a; text-align: center; }
-        .report-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #28a745; }
+        .report-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #d9534f; }
+        .button-container { text-align: center; margin-top: 2rem; }
+        .button { display: inline-block; text-decoration: none; padding: 0.8rem 1.5rem; background-color: #007bff; color: white; border-radius: 5px; transition: background-color 0.3s; margin: 0 0.5rem; }
+        .button:hover { background-color: #0056b3; }
+        .button-secondary { background-color: #6c757d; }
+        .button-secondary:hover { background-color: #5a6268; }
+        .button-success { background-color: #28a745; }
+        .button-success:hover { background-color: #218838; }
         table { border-collapse: collapse; width: 100%; margin-top: 2rem; }
         th, td { border: 1px solid #ddd; padding: 0.8rem; text-align: left; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
         tr:hover { background-color: #f1f1f1; }
-        .back-link { display: inline-block; margin-top: 2rem; text-decoration: none; padding: 0.8rem 1.5rem; background-color: #6c757d; color: white; border-radius: 5px; transition: background-color 0.3s; }
-        .back-link:hover { background-color: #5a6268; }
     </style>
 </head>
 <body>
@@ -40,14 +45,19 @@
                 {% for row in data %}
                     <tr>
                         {% for cell in row %}
-                            <td>{{ cell }}</td>
+                            <td>{{ cell | safe }}</td>
                         {% endfor %}
                     </tr>
                 {% endfor %}
             </tbody>
         </table>
 
-        <a href="/" class="back-link">返回主選單</a>
+        <div class="button-container">
+            <a href="/" class="button button-secondary">返回主選單</a>
+            <a href="/run/daily" class="button">重新 DAILY 分析</a>
+            <a href="/run/weekly" class="button">重新 WEEKLY 分析</a>
+            <a href="/download/{{ mode.lower() }}" class="button button-success">下載分析報告 (CSV)</a>
+        </div>
     </div>
 </body>
 </html>

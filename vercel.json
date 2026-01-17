@@ -1,0 +1,14 @@
+{
+  "functions": {
+    "main.py": {
+      "maxLambdaSize": "45mb",
+      "includeFiles": "src/**"
+    }
+  },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "main.py"
+    }
+  ]
+}

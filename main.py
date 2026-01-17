@@ -1,10 +1,11 @@
-from flask import Flask, render_template, redirect, url_for
+from flask import Flask, render_template, redirect, url_for, Response
 import yfinance as yf
 import pandas as pd
 import os
 import time
 from datetime import datetime
 import numpy as np
+import io
 
 # ================= Flask App Initialization =================
 app = Flask(__name__)
@@ -13,14 +14,8 @@ app = Flask(__name__)
 WATCHLIST_FILE = "src/我的自選清單.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-def init_system():
-    os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
-    default_list = ["^TWII", "3481.TW", "2409.TW", "3260.TWO", "2408.TW", "1513.TW", "1519.TW", "2330.TW", "2317.TW", "3017.TW"]
-    if not os.path.exists(WATCHLIST_FILE):
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(default_list))
-    if not os.path.exists(GENE_CACHE_FILE):
-        pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
+# init_system is removed as Vercel has a read-only filesystem.
+# The required files are expected to be in the `src` directory.
 
 def get_sector_label(t):
     c = t.split('.')[0]
@@ -32,11 +27,14 @@ def get_sector_label(t):
 
 # ================= 2. Core Engine: Stable Hunter + 1.382 Prediction =================
 def run_stable_hunter(mode='DAILY'):
-    init_system()
+    # init_system() is removed.
+    # We assume the files exist. If not, it will raise an error.
+    # This is acceptable for a deployed app where the source files are part of the deployment.
     with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
 
     results, new_cache = [], []
+    # Reading from src/
     cache_df = pd.read_csv(GENE_CACHE_FILE).set_index('ticker')
 
     for i, t in enumerate(targets):
@@ -91,7 +89,7 @@ def run_stable_hunter(mode='DAILY'):
                 best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
                 fit_val = f"{f_raw-100:.1f}%"
                 new_cache.append({'ticker': t, 'best_p': best_p, 'fit': fit_val})
-            else:
+            else: # DAILY mode
                 if t in cache_df.index:
                     best_p = int(cache_df.loc[t, 'best_p'])
                     fit_val = cache_df.loc[t, 'fit']
@@ -108,10 +106,23 @@ def run_stable_hunter(mode='DAILY'):
                             "signal": signal, "sector": get_sector_label(t)})
             time.sleep(0.5)
         except Exception as e:
+            # In a deployed environment, better to log the error
+            print(f"Error processing ticker {t}: {e}")
             continue
 
-    if mode == 'WEEKLY': pd.DataFrame(new_cache).to_csv(GENE_CACHE_FILE, index=False)
+    # Removed writing to GENE_CACHE_FILE for Vercel compatibility
+    # if mode == 'WEEKLY': pd.DataFrame(new_cache).to_csv(GENE_CACHE_FILE, index=False)
     return results
+
+def generate_final_table(data):
+    buys = [r['sector'] for r in data if r['signal'] == "🟢🟢 埋伏" and r['sector'] != "[熱門]"]
+    final_table = []
+    for r in data:
+        prefix = "🔥🔥【族群起漲!】" if buys.count(r['sector']) >= 2 else ""
+        order = f"{prefix}🎯【買入】看 {r['target']}" if r['signal'] == "🟢🟢 埋伏" else "🚀【持有】"
+        if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
+        final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
+    return final_table
 
 # ================= 3. Web Application Routes =================
 @app.route('/')
@@ -124,24 +135,37 @@ def run_analysis(mode):
         return redirect(url_for('index'))
 
     data = run_stable_hunter(mode=mode.upper())
-    
-    buys = [r['sector'] for r in data if r['signal'] == "🟢🟢 埋伏" and r['sector'] != "[熱門]"]
-    final_table = []
-    for r in data:
-        prefix = "🔥🔥【族群起漲!】" if buys.count(r['sector']) >= 2 else ""
-        order = f"{prefix}🎯【買入】看 {r['target']}" if r['signal'] == "🟢🟢 埋伏" else "🚀【持有】"
-        if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
-        final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
+    final_table = generate_final_table(data)
 
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     
-    report_info = ""
-    if mode.upper() == 'WEEKLY':
-        report_path = os.path.join("src", f"每週分析_{datetime.now().strftime('%Y%m%d')}.txt")
-        # We are not writing the report file in the web version for simplicity
-        report_info = f"報表已產生 (僅於終端機版本儲存至 {report_path})"
-
+    report_info = "每週分析無法在雲端版更新基因快取檔案，建議在本機執行。" if mode.upper() == 'WEEKLY' else ""
+    
     return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info)
+
+@app.route('/download/<mode>')
+def download_report(mode):
+    if mode.upper() not in ['DAILY', 'WEEKLY']:
+        return "Invalid mode", 400
+
+    data = run_stable_hunter(mode=mode.upper())
+    final_table = generate_final_table(data)
+    
+    headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
+    df = pd.DataFrame(final_table, columns=headers)
+    
+    output = io.StringIO()
+    df.to_csv(output, index=False, encoding='utf-8-sig')
+    csv_data = output.getvalue()
+    
+    timestamp = datetime.now().strftime('%Y%m%d')
+    filename = f"analysis_report_{mode.lower()}_{timestamp}.csv"
+    
+    return Response(
+        csv_data,
+        mimetype="text/csv",
+        headers={"Content-disposition":
+                 f"attachment; filename={filename}"})
 
 
 # ================= Main Entry Point for Web Server =================
