@@ -1,4 +1,4 @@
-# PHOENIX PROTOCOL - The Final, Correct, and Stable Solution with Dynamic IPs
+# LIBERTY PROTOCOL - The Final Battle on a New Front (US-based IPs)
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -15,10 +15,9 @@ import string
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ================= Bright Data Proxy Setup (PHOENIX) =================
-# We now understand the enemy: IP rate-limiting.
-# The solution is to generate a new session ID for each major operation,
-# forcing Bright Data to give us a new, clean exit IP.
+# ================= Bright Data Proxy Setup (LIBERTY) =================
+# We now understand the enemy: The entire GB (UK) proxy region is compromised.
+# The final solution is to change the battlefield entirely to the US region.
 PROXY_USERNAME_BASE = "brd-customer-hl_a9437f18-zone-residential_proxy1"
 PROXY_PASSWORD = "fi5sx9h4kzl6"
 PROXY_HOST = "brd.superproxy.io"
@@ -26,12 +25,13 @@ PROXY_PORT = 33335
 
 def get_dynamic_proxy_url():
     session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    proxy_username = f'{PROXY_USERNAME_BASE}-session-{session_id}'
+    # LIBERTY PROTOCOL: Force US-based IPs and keep the session dynamic.
+    proxy_username = f'{PROXY_USERNAME_BASE}-country-us-session-{session_id}'
     proxy_url = f"http://{proxy_username}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
-    logging.info(f"Generated new PHOENIX proxy URL with session: {session_id}")
+    logging.info(f"Generated new LIBERTY proxy URL for US region with session: {session_id}")
     return proxy_url
 
-logging.info(">>>>>[PHOENIX PROTOCOL ENGAGED] Dynamic IP strategy is active.<<<<<")
+logging.info(">>>>>[LIBERTY PROTOCOL ENGAGED] US-Region IP strategy is active.<<<<<")
 
 # ================= Flask App Initialization =================
 app = Flask(__name__)
@@ -67,10 +67,10 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Engine (PHOENIX PROTOCOL) =================
+# ================= 2. Core Engine (LIBERTY PROTOCOL) =================
 def run_stable_hunter(mode='DAILY'):
-    # PHOENIX: Get a new proxy URL for every single run.
-    PHOENIX_PROXY_URL = get_dynamic_proxy_url()
+    # LIBERTY: Get a new US-based proxy URL for every single run.
+    LIBERTY_PROXY_URL = get_dynamic_proxy_url()
 
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -104,20 +104,20 @@ def run_stable_hunter(mode='DAILY'):
     period = "5y" if analysis_mode == 'WEEKLY' else ("2d" if mode == 'QUICK_SCAN' else "60d")
     all_data = None
     try:
-        logging.info(f"Executing PHOENIX download for {len(targets)} targets with period '{period}'...")
+        logging.info(f"Executing LIBERTY download for {len(targets)} targets with period '{period}' from US region...")
         all_data = yf.download(
             tickers=targets,
             period=period,
             auto_adjust=False,
-            proxy=PHOENIX_PROXY_URL, # Use the new dynamic URL
+            proxy=LIBERTY_PROXY_URL, # Use the new dynamic US-based URL
             timeout=90,
             group_by='ticker' if len(targets) > 1 else None
         )
         if all_data.empty:
-            raise ValueError("yf.download returned an empty DataFrame. The proxy IP may have been blocked.")
-        logging.info("PHOENIX download successful.")
+            raise ValueError("yf.download returned an empty DataFrame. The US-based proxy IP may have been blocked.")
+        logging.info("LIBERTY download successful.")
     except Exception as e:
-        logging.error(f"FATAL: PHOENIX download failed: {e}", exc_info=True)
+        logging.error(f"FATAL: LIBERTY download failed: {e}", exc_info=True)
         error_results = [{"name": f"分析失敗: {t}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"} for t in targets]
         return error_results, scan_time, analysis_mode, list_file
 
@@ -200,7 +200,7 @@ def run_stable_hunter(mode='DAILY'):
         
     return results, scan_time, analysis_mode, list_file
 
-# ================= 3. Flask Web Routes (PHOENIX PROTOCOL) =================
+# ================= 3. Flask Web Routes (LIBERTY PROTOCOL) =================
 @app.route('/')
 def index():
     return render_template('index.html')
