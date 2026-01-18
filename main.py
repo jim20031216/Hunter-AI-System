@@ -1,4 +1,4 @@
-# Final Production Code with Multi-Threading Engine and Browser Disguise
+# Final Production Code with yfinance's native curl-cffi engine
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -10,7 +10,6 @@ import io
 import logging
 import pytz
 import concurrent.futures
-import requests
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,11 +23,9 @@ MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
 def get_stock_name(ticker):
-    # This function can also benefit from the session disguise
     try:
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        info = yf.Ticker(ticker, session=session).info
+        # Let yfinance handle the session automatically with curl-cffi
+        info = yf.Ticker(ticker).info
         name = info.get('longName', info.get('shortName', ticker))
         return name if name and isinstance(name, str) else ticker
     except Exception as e:
@@ -63,7 +60,7 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. FINAL Core Engine (Multi-Threaded with Browser Disguise) =================
+# ================= 2. FINAL Core Engine (Powered by curl-cffi) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -90,13 +87,10 @@ def run_stable_hunter(mode='DAILY'):
     
     def fetch_and_analyze_ticker(ticker):
         try:
-            logging.info(f"THREAD: Fetching data for {ticker} with browser disguise")
+            logging.info(f"THREAD: Fetching data for {ticker} using yfinance's native engine.")
             
-            session = requests.Session()
-            session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-
-            ticker_obj = yf.Ticker(ticker, session=session)
-            df = ticker_obj.history(period=period, auto_adjust=False, timeout=20)
+            # REMOVED custom session. Let yfinance handle it with curl-cffi.
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=False, timeout=20)
             
             if df.empty:
                 raise ValueError("Downloaded DataFrame is empty.")
@@ -162,7 +156,7 @@ def run_stable_hunter(mode='DAILY'):
                            "signal": signal, "sector": get_sector_label(ticker)}, "cache": new_cache_item}
         
         except Exception as e:
-            logging.error(f"THREAD ERROR on {ticker}: {e}", exc_info=False)
+            logging.error(f"THREAD ERROR on {ticker}: {e}", exc_info=True)
             return {"status": "error", "data": {"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"}, "cache": None}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
