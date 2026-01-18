@@ -1,4 +1,4 @@
-# DIRECT STRIKE PROTOCOL - The Last Stand. No Proxies.
+# DIRECT STRIKE PROTOCOL v1.1 - Single-Target Fix
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -49,7 +49,7 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Engine (DIRECT STRIKE PROTOCOL) =================
+# ================= 2. Core Engine (DIRECT STRIKE PROTOCOL v1.1) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -67,9 +67,13 @@ def run_stable_hunter(mode='DAILY'):
     with open(list_file, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     
-    if len(targets) > 1 and "^TWII" in targets:
+    # SINGLE-TARGET FIX: If only one target, yfinance returns a simple DataFrame.
+    # If multiple targets, it returns a dict of DataFrames. We need to handle this.
+    is_single_target = len(targets) == 1
+    if not is_single_target and "^TWII" in targets:
         targets.remove("^TWII")
         logging.info("Removed ^TWII from multi-stock scan for stability.")
+        is_single_target = len(targets) == 1 # Re-check after removal
         
     if not targets:
         logging.warning("No targets found for analysis. Returning empty results.")
@@ -88,9 +92,9 @@ def run_stable_hunter(mode='DAILY'):
             tickers=targets,
             period=period,
             auto_adjust=False,
-            proxy=None, # DIRECT STRIKE: No proxy is used.
+            proxy=None, 
             timeout=60,
-            group_by='ticker' if len(targets) > 1 else None
+            group_by='ticker' if not is_single_target else None
         )
         if all_data.empty:
             raise ValueError("yf.download returned an empty DataFrame. Vercel\'s native IP may be blocked or rate-limited.")
@@ -105,7 +109,8 @@ def run_stable_hunter(mode='DAILY'):
 
     for ticker in targets:
         try:
-            df = all_data[ticker] if len(targets) > 1 else all_data
+            # SINGLE-TARGET FIX: Handle both single and multi-target data structures.
+            df = all_data if is_single_target else all_data[ticker]
             if df.empty or df.isnull().all().all(): raise ValueError("DataFrame for this ticker is empty.")
             df.dropna(inplace=True)
             if df.empty: raise ValueError("DataFrame is empty after dropping NaNs.")
@@ -179,7 +184,7 @@ def run_stable_hunter(mode='DAILY'):
         
     return results, scan_time, analysis_mode, list_file
 
-# ================= 3. Flask Web Routes (DIRECT STRIKE PROTOCOL) =================
+# ================= 3. Flask Web Routes (DIRECT STRIKE PROTOCOL v1.1) =================
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -218,9 +223,8 @@ def run_analysis(mode):
     if mode_upper == 'WEEKLY':
         report_info = "每週分析完成，基因快取已更新。"
     elif mode_upper == 'QUICK_SCAN':
-        # Filter out errors before counting for a more accurate report
         successful_targets = [d for d in data if d.get("sector") != "ERROR"]
-        report_info = f"掃描完成，發現 {len(successful_targets)} 個符合「紅K帶量」的潛力目標。"
+        report_info = f"掃描完成，發現 {len(successful_targets)} 個出現「紅K帶量」短期訊號的目標。請結合「狀態」欄位判斷主要趨勢。"
     
     if error_flag:
         report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
