@@ -22,19 +22,10 @@ GENE_CACHE_FILE = "src/基因快取.csv"
 
 # Robust stock name fetching using yfinance only (Vercel compatible)
 def get_stock_name(ticker):
-    """
-    Fetches a stock's name using yfinance.
-    Prioritizes 'longName', falls back to 'shortName', and finally to the ticker itself.
-    """
     try:
         info = yf.Ticker(ticker).info
         name = info.get('longName', info.get('shortName', ticker))
-        if name and isinstance(name, str):
-            return name
-        else:
-            # This handles cases where the name might be None or not a string
-            logging.warning(f"yfinance returned invalid name for {ticker}. Returning original ticker.")
-            return ticker
+        return name if name and isinstance(name, str) else ticker
     except Exception as e:
         logging.error(f"yfinance lookup failed for {ticker}: {e}. Returning original ticker.")
         return ticker
@@ -61,6 +52,8 @@ def get_sector_label(t):
 
 # init_system logic from your V.FINAL.ULTRA
 def init_system_files():
+    if not os.path.exists("src/"):
+        os.makedirs("src/")
     if not os.path.exists(MARKET_SCAN_LIST_FILE):
         default_list = ["^TWII", "3481.TW", "2409.TW", "3260.TWO", "2408.TW", "1513.TW", "1519.TW", "2330.TW", "2317.TW", "3017.TW", "2454.TW"]
         with open(MARKET_SCAN_LIST_FILE, "w", encoding="utf-8") as f:
@@ -68,35 +61,38 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Stock Analysis Engine =================
+# ================= 2. Core Stock Analysis Engine (Vercel Optimized) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
+    results, new_cache = [], []
+    analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
 
     is_market_scan = mode.startswith('MARKET')
     list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
     
     if not is_market_scan and not os.path.exists(WATCHLIST_FILE):
-         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-             f.write("# 請在此輸入您的自選股，一行一檔，例如：\n# 2330.TW\n# 0050.TW")
+         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
 
     with open(list_file, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        if not targets: return [], scan_time, analysis_mode
 
-    results, new_cache = [], []
     try:
         cache_df = pd.read_csv(GENE_CACHE_FILE).set_index('ticker')
     except (FileNotFoundError, pd.errors.EmptyDataError):
         cache_df = pd.DataFrame(columns=['ticker', 'best_p', 'fit']).set_index('ticker')
 
-    analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
+    # --- Batch Download (Performance Optimization) ---
+    period = "5y" if analysis_mode == 'WEEKLY' else "60d"
+    all_data = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=9, group_by='column')
 
     for ticker in targets:
-        time.sleep(1) # Polite delay
         try:
-            df = yf.download(ticker, period="60d" if analysis_mode == 'DAILY' else "5y", progress=False, auto_adjust=False, timeout=15)
-            
-            if df.empty: raise ValueError("yf.download returned an empty DataFrame.")
+            df = all_data.loc[:, (slice(None), ticker)].copy()
+            df.columns = df.columns.droplevel(1)
+            df = df.dropna()
+            if df.empty: raise ValueError(f"No data for {ticker} in batch.")
 
             last = df.iloc[-1]
             last_p = float(last['Close'])
@@ -105,7 +101,6 @@ def run_stable_hunter(mode='DAILY'):
             if analysis_mode == 'WEEKLY':
                 battle = []
                 for p in [10, 20, 60]:
-                    # Strategy calculation...
                     df_strat = df[['Close']].copy()
                     df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
                     df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
@@ -144,13 +139,8 @@ def run_stable_hunter(mode='DAILY'):
                            "signal": signal, "sector": get_sector_label(ticker)})
         
         except Exception as e:
-            logging.error(f"CRITICAL ERROR on {ticker} in {mode}: {e}", exc_info=True)
-            error_message = str(e)
-            results.append({
-                "name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A",
-                "status": "🔴 錯誤", "signal": f"{e.__class__.__name__}",
-                "order_error": error_message, "sector": "ERROR"
-            })
+            logging.error(f"CRITICAL ERROR on {ticker} in {mode}: {e}", exc_info=False)
+            results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
             continue
     
     if new_cache:
@@ -158,7 +148,6 @@ def run_stable_hunter(mode='DAILY'):
         combined_df = pd.concat([cache_df, new_df])
         updated_cache_df = combined_df[~combined_df.index.duplicated(keep='last')]
         updated_cache_df.to_csv(GENE_CACHE_FILE)
-        logging.info(f"Gene cache updated with {len(new_cache)} entries.")
         
     return results, scan_time, analysis_mode
 
@@ -169,10 +158,8 @@ def index():
 
 @app.route('/run/<mode>')
 def run_analysis(mode):
-    # 1. Run the analysis to get raw data
     results, scan_time, analysis_mode = run_stable_hunter(mode=mode.upper())
 
-    # 2. Sort and Process data for display
     if mode.upper() == 'MARKET_BACKTEST':
         results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
 
@@ -187,13 +174,11 @@ def run_analysis(mode):
             if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
             final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
 
-    # 3. Prepare display headers and info
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
     if any(r.get("sector") == "ERROR" for r in results):
         report_info = f"偵測到 {sum(1 for r in results if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
 
-    # 4. Render the results page
     return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time)
 
 @app.route('/watchlist/select')
@@ -202,17 +187,15 @@ def select_watchlist_analysis():
 
 @app.route('/watchlist', methods=['GET', 'POST'])
 def manage_watchlist():
+    init_system_files()
     if not os.path.exists(WATCHLIST_FILE):
-         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-             f.write("# 請在此輸入您的自選股，一行一檔，例如：\n# 2330.TW\n# 0050.TW")
+         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
 
     if request.method == 'POST':
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-            f.write(request.form['watchlist_content'])
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(request.form['watchlist_content'])
         return redirect(url_for('manage_watchlist'))
     
-    with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
-        content = f.read()
+    with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
     
     tickers = [l.strip() for l in content.splitlines() if l.strip() and not l.startswith("#")]
     ticker_details = [{'ticker': t, 'name': get_stock_name(t)} for t in tickers]
@@ -221,5 +204,4 @@ def manage_watchlist():
 
 # ================= Main Entry Point for Local Server =================
 if __name__ == '__main__':
-    # Note: Use start_server.sh or devserver.sh to run
     app.run(host='0.0.0.0', port=8081, debug=True)
