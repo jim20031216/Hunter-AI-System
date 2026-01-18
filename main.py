@@ -10,19 +10,23 @@ import io
 import logging
 import pytz
 import concurrent.futures
+import requests
 
-# ================= Bright Data Proxy Setup =================
-# 金鑰資訊已直接植入，準備迎接正式作戰
+# ================= Bright Data Proxy Setup (Hardware-Level) =================
+# 最終解決方案：建立一個專用的、強制使用代理的 requests session
 PROXY_USERNAME = "brd-customer-hl_a9437f18-zone-residential_proxy1"
 PROXY_PASSWORD = "fi5sx9h4kzl6"
 PROXY_HOST = "brd.superproxy.io"
 PROXY_PORT = 33335
 PROXY_URL = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
 
-# 設定 yfinance 使用我們的秘密通道
-os.environ['HTTP_PROXY'] = PROXY_URL
-os.environ['HTTPS_PROXY'] = PROXY_URL
-logging.info(">>>>>[SECRET CHANNEL ESTABLISHED] Proxy environment variables set. AI Hunter is now cloaked.<<<<<<")
+# 建立一個全局的、帶有代理設定的 Session 物件
+proxy_session = requests.Session()
+proxy_session.proxies = {
+    "http": PROXY_URL,
+    "https": PROXY_URL
+}
+logging.info(">>>>>[HARDWARE-LEVEL CHANNEL ESTABLISHED] Dedicated proxy session created. AI Hunter is now permanently cloaked.<<<<<")
 
 
 # ================= Logging Setup =================
@@ -32,7 +36,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 
 # ================= 1. Core Files & Helper Logic (Vercel Compatible) =================
-# Vercel 的臨時文件系統需要我們使用 /tmp 目錄進行任何寫入操作。
 WATCHLIST_FILE = "/tmp/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "/tmp/market_scan_list.txt"
 GENE_CACHE_FILE = "/tmp/基因快取.csv"
@@ -40,8 +43,8 @@ GENE_CACHE_FILE = "/tmp/基因快取.csv"
 
 def get_stock_name(ticker):
     try:
-        # yfinance 會透過我們設定的代理通道來獲取資訊
-        info = yf.Ticker(ticker).info
+        # 強制使用我們的代理 session
+        info = yf.Ticker(ticker, session=proxy_session).info
         name = info.get('longName', info.get('shortName', ticker))
         return name if name and isinstance(name, str) else ticker
     except Exception as e:
@@ -67,8 +70,6 @@ def get_sector_label(t):
     return "[熱門]"
 
 def init_system_files():
-    # 我們不能在 Vercel 的唯讀文件系統上創建目錄，所以我們使用 /tmp。
-    # 創建 'src' 目錄的操作已被移除。
     if not os.path.exists(MARKET_SCAN_LIST_FILE):
         default_list = ["^TWII", "3481.TW", "2409.TW", "3260.TWO", "2408.TW", "1513.TW", "1519.TW", "2330.TW", "2317.TW", "3017.TW", "2454.TW"]
         with open(MARKET_SCAN_LIST_FILE, "w", encoding="utf-8") as f:
@@ -78,27 +79,21 @@ def init_system_files():
 
 # ================= 2. NEW WEAPON: Quick Trend Scan =================
 def quick_trend_scan():
-    """
-    全新的作戰模式：市場趨勢快速掃描
-    1. 低成本抓取全市場日線資料
-    2. 篩選出真正「價量俱揚」的強勢潛力股
-    3. 返回一個精簡後的目標清單
-    """
-    init_system_files() # 確保 /tmp 中的列表存在
+    init_system_files()
     try:
-        logging.info(">>>>>[QUICK SCAN INITIATED] Launching new quick trend scan weapon...<<<<<<")
+        logging.info(">>>>>[QUICK SCAN INITIATED] Launching new quick trend scan weapon...<<<<<")
         with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
             full_market_list = [l.strip() for l in f if l.strip() and not l.startswith("#") and l.strip() != "^TWII"]
 
         if not full_market_list:
-            return ["2330.TW"] # 如果列表為空，返回一個預設目標
+            return ["2330.TW"]
 
-        data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True)
+        # 強制使用我們的代理 session
+        data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True, session=proxy_session)
 
         potential_targets = []
         for ticker in full_market_list:
             try:
-                # 在 Vercel 環境中，某些股票的數據格式可能不同
                 df = data.get(ticker)
                 if df is None or len(df) < 2: continue
 
@@ -113,7 +108,7 @@ def quick_trend_scan():
             except (KeyError, IndexError, TypeError):
                 continue
 
-        logging.info(f">>>>>>[QUICK SCAN REPORT] Found {len(potential_targets)} potential targets: {potential_targets}<<<<<<")
+        logging.info(f">>>>>>[QUICK SCAN REPORT] Found {len(potential_targets)} potential targets: {potential_targets}<<<<<")
         return potential_targets if potential_targets else ["^TWII"]
 
     except Exception as e:
@@ -135,7 +130,6 @@ def run_stable_hunter(mode='DAILY'):
     else:
         list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
         if not os.path.exists(list_file):
-             # 確保在讀取前創建文件
              with open(list_file, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股\n")
 
         with open(list_file, "r", encoding="utf-8") as f:
@@ -154,10 +148,11 @@ def run_stable_hunter(mode='DAILY'):
     
     def fetch_and_analyze_ticker(ticker):
         try:
-            logging.info(f"THREAD: Fetching data for {ticker} via proxy.")
+            logging.info(f"THREAD: Fetching data for {ticker} via hardware-level proxy.")
             
-            ticker_obj = yf.Ticker(ticker)
-            df = ticker_obj.history(period=period, auto_adjust=False, timeout=20)
+            # 強制使用我們的代理 session
+            ticker_obj = yf.Ticker(ticker, session=proxy_session)
+            df = ticker_obj.history(period=period, auto_adjust=False, timeout=30) # 增加超時
             
             if df.empty: raise ValueError("Downloaded DataFrame is empty.")
             df.dropna(inplace=True)
@@ -222,7 +217,7 @@ def run_stable_hunter(mode='DAILY'):
             logging.error(f"THREAD ERROR on {ticker}: {e}", exc_info=True)
             return {"status": "error", "data": {"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"}, "cache": None}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor: # 增加並發數
         future_to_ticker = {executor.submit(fetch_and_analyze_ticker, ticker): ticker for ticker in targets}
         for future in concurrent.futures.as_completed(future_to_ticker):
             results_agg.append(future.result())
@@ -282,7 +277,7 @@ def select_watchlist_analysis():
 
 @app.route('/watchlist', methods=['GET', 'POST'])
 def manage_watchlist():
-    init_system_files() # 確保 /tmp 中的文件存在
+    init_system_files()
 
     if request.method == 'POST':
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(request.form['watchlist_content'])
@@ -291,7 +286,6 @@ def manage_watchlist():
     try:
         with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
     except FileNotFoundError:
-        # 如果文件不存在，創建一個空的
         content = "# 請在此輸入您的自選股\n"
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(content)
 
