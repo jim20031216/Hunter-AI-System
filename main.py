@@ -95,10 +95,16 @@ def run_analysis_route(mode):
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
 
     for ticker in targets:
+        time.sleep(2) # Polite delay to prevent getting blocked
         try:
-            df = yf.download(ticker, period="60d" if analysis_mode == 'DAILY' else "5y", progress=False, auto_adjust=True, timeout=10)
-            if df.empty: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            df = yf.download(ticker, period="60d" if analysis_mode == 'DAILY' else "5y", progress=False, auto_adjust=False, timeout=15, group_by='column')
+            
+            if df.empty:
+                raise ValueError("yf.download returned an empty DataFrame.")
+
+            expected_cols = {'Open', 'High', 'Low', 'Close', 'Volume'}
+            if not expected_cols.issubset(df.columns):
+                raise KeyError(f"Dataframe missing columns. Expected: {expected_cols}, Found: {list(df.columns)}")
 
             last = df.iloc[-1]
             last_p = float(last['Close'])
@@ -144,18 +150,23 @@ def run_analysis_route(mode):
             stock_name = get_stock_name(ticker)
             display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
             
-            result = {"name": display_name, "p": f"{best_p}d", "fit": fit_val,
-                      "price": f"{last_p:.1f}", "target": target_1382, "status": status,
-                      "signal": signal, "sector": get_sector_label(ticker)}
-            
-            # FINAL, ULTIMATE, CORRECTED LOGIC: As per your precedent file,
-            # NO filtering should be applied here. All results are appended and sorted later.
-            if result:
-                results.append(result)
-            
-            time.sleep(0.25)
+            results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
+                           "price": f"{last_p:.1f}", "target": target_1382, "status": status,
+                           "signal": signal, "sector": get_sector_label(ticker)})
+        
         except Exception as e:
-            logging.error(f"Error processing ticker {ticker} in {mode}: {e}")
+            # Point 1: Expose the error to the user interface.
+            logging.error(f"CRITICAL ERROR on {ticker} in {mode}: {e}", exc_info=True)
+            error_message = str(e)
+            error_result = {
+                "name": f"分析失敗: {ticker}",
+                "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A",
+                "status": f"🔴 錯誤",
+                "signal": f"{e.__class__.__name__}",
+                "order_error": error_message, # Store raw error message
+                "sector": "ERROR"
+            }
+            results.append(error_result)
             continue
     
     if new_cache:
@@ -165,21 +176,25 @@ def run_analysis_route(mode):
         updated_cache_df.to_csv(GENE_CACHE_FILE)
         logging.info(f"Gene cache updated with {len(new_cache)} entries.")
 
-    # The sorting for MARKET_BACKTEST is still needed as per your original logic.
-    # This part remains correct.
     if mode == 'MARKET_BACKTEST':
-        results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r['fit'] and r['fit'] != 'N/A' else -9999, reverse=True)
+        results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
 
-    buys = [r['sector'] for r in results if r['signal'] == "🟢🟢 埋伏" and r['sector'] != "[熱門]"]
+    # Point 4: Adapt frontend logic for error handling
+    buys = [r['sector'] for r in results if r.get('signal') == "🟢🟢 埋伏" and r.get('sector') != "[熱門]" and "ERROR" not in r.get('sector',"")]
     final_table = []
     for r in results:
-        prefix = "🔥🔥【族群起漲!】" if buys.count(r['sector']) >= 2 and r['sector'] != "[熱門]" else ""
-        order = f"{prefix}🎯【買入】看 {r['target']}" if r['signal'] == "🟢🟢 埋伏" else "🚀【持有】"
-        if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
-        final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
+        if r.get("sector") == "ERROR":
+            final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], r['order_error']])
+        else:
+            prefix = "🔥🔥【族群起漲!】" if buys.count(r['sector']) >= 2 and r['sector'] != "[熱門]" else ""
+            order = f"{prefix}🎯【買入】看 {r['target']}" if r['signal'] == "🟢🟢 埋伏" else "🚀【持有】"
+            if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
+            final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
 
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
+    if any(r.get("sector") == "ERROR" for r in results):
+        report_info = f"偵測到 {sum(1 for r in results if r.get('sector') == 'ERROR')} 個分析錯誤。" + report_info
 
     return render_template('results.html', headers=headers, data=final_table, mode=mode, report_info=report_info, scan_time=scan_time)
 
@@ -208,7 +223,21 @@ def manage_watchlist():
 
 @app.route('/download/<mode>')
 def download_report(mode):
-    return Response("Download functionality is under construction.", mimetype="text/plain")
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8081)
+    # This is a placeholder. In a real app, you'd generate a CSV.
+    # For now, let's create a dummy CSV string for demonstration.
+    output = io.StringIO()
+    # A proper implementation would fetch the data similar to run_analysis_route
+    # and format it into a CSV.
+    # For now, just a message:
+    output.write("Ticker,Name,Signal\n")
+    output.write("2330.TW,TSMC,HOLD\n")
+    output.write("0050.TW,Yuanta/P-shares Taiwan Top 50 ETF,BUY\n")
+    
+    # Move the pointer to the beginning of the stream
+    output.seek(0)
+    
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename={mode}_report.csv"}
+    )
