@@ -87,9 +87,9 @@ def run_stable_hunter(mode='DAILY'):
         logging.info(f"Attempting FAST batch download for {len(targets)} tickers...")
         all_data_raw = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=20, group_by='column')
         
-        # *** THE ULTIMATE CHECK ***
-        # If the returned DataFrame is empty OR if all 'Close' prices are NaN, it's a total failure.
-        if all_data_raw.empty or (isinstance(all_data_raw['Close'], pd.DataFrame) and all_data_raw['Close'].isna().all().all()):
+        # *** THE FINAL, CORRECTED CHECK ***
+        # This handles all cases (single/multi-ticker, empty, all-NaN) correctly.
+        if all_data_raw.empty or all_data_raw['Close'].isnull().values.all():
              logging.warning("Batch download returned no valid data. Forcing fallback.")
              all_data = None # Force fallback
         else:
