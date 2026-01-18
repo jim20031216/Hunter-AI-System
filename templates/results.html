@@ -7,6 +7,7 @@
     <style>
         body { font-family: sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 2rem; }
         .container { background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin: auto; }
+        /* TRIUMPH: Use the new {{ title }} variable */
         h1 { color: #1c2e4a; text-align: center; }
         .scan-time { text-align: center; color: #555; font-size: 1rem; margin-top: -1rem; margin-bottom: 1rem; }
         .report-info, .action-info { text-align: center; margin: 1rem 0; font-weight: bold; color: #d9534f; }
@@ -28,17 +29,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>
-            {% if mode == 'MARKET' %}📡 市場即時掃描結果 (強勢股)
-            {% elif mode == 'MARKET_BACKTEST' %}🧠 市場潛力股回測結果
-            {% elif mode == 'DAILY' %}🔥 自選股每日追蹤
-            {% else %}🏥 自選股策略回測
-            {% endif %}
-        </h1>
+        <!-- TRIUMPH: Title is now a single, reliable variable -->
+        <h1>{{ title | safe }}</h1>
 
         {% if error_flag %}
         <div class="error-message">
-            偵測到嚴重錯誤：後端資料下載失敗，目前顯示的為空資料或快取頁面。請立即聯繫技術支援。
+            偵測到嚴重錯誤：後端資料下載失敗或分析過程發生問題。請檢查您的股票代碼是否正確，或稍後再試。
         </div>
         {% endif %}
 
