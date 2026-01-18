@@ -1,3 +1,4 @@
+# Triggering a redeployment to ensure the latest fixes are applied.
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
