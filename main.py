@@ -1,4 +1,4 @@
-# Triggering a redeployment to ensure the latest fixes are applied.
+# Final Production Code with Multi-Threading Engine
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -9,6 +9,7 @@ import numpy as np
 import io
 import logging
 import pytz
+import concurrent.futures
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -58,11 +59,10 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Stock Analysis Engine (Now with Ultimate Fallback) =================
+# ================= 2. NEW Core Stock Analysis Engine (Multi-Threaded) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
-    results, new_cache = [], []
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
 
     is_market_scan = mode.startswith('MARKET')
@@ -80,104 +80,107 @@ def run_stable_hunter(mode='DAILY'):
     except (FileNotFoundError, pd.errors.EmptyDataError):
         cache_df = pd.DataFrame(columns=['ticker', 'best_p', 'fit']).set_index('ticker')
 
-    # --- Data Download Section with Ultimate Fallback ---
     period = "5y" if analysis_mode == 'WEEKLY' else "60d"
-    all_data = None
-    try:
-        logging.info(f"Attempting FAST batch download for {len(targets)} tickers...")
-        all_data_raw = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=20, group_by='column')
+    
+    results_agg = []
+    
+    # This function is executed by each thread
+    def fetch_and_analyze_ticker(ticker):
+        try:
+            logging.info(f"THREAD: Fetching data for {ticker}")
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=False, timeout=20)
+            if df.empty:
+                raise ValueError("Downloaded DataFrame is empty.")
+            df.dropna(inplace=True)
+            if df.empty:
+                raise ValueError("DataFrame is empty after dropping NaNs.")
+
+            # --- Analysis Logic ---
+            last = df.iloc[-1]
+            last_p = float(last['Close'])
+            best_p, fit_val = 20, "N/A"
+            new_cache_item = None
+
+            if analysis_mode == 'WEEKLY':
+                battle = []
+                for p in [10, 20, 60]:
+                    df_strat = df[['Close']].copy()
+                    df_strat['ma'] = df_strat['Close'].rolling(p).mean()
+                    df_strat.dropna(inplace=True)
+                    if df_strat.empty: continue
+                    
+                    df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
+                    df_strat['signal_change'] = df_strat['above_ma'].diff()
+                    df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
+                    df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
+                    
+                    trades = df_strat[df_strat['signal_change'] == -1]
+                    if trades.empty or trades['entry_price_held'].isnull().all():
+                         trade_profits_pct = []
+                    else:
+                         trade_profits_pct = ((trades['Close'] - trades['entry_price_held']) / trades['entry_price_held'] - 0.004).tolist()
+
+                    if df_strat['above_ma'].iloc[-1] == 1:
+                        last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
+                        if not last_buy_idx.empty:
+                            entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
+                            exit_price_open = df_strat['Close'].iloc[-1]
+                            if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
+                    
+                    current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
+                    battle.append((p, current_capital))
+                
+                if not battle: raise ValueError("Could not perform weekly backtest.")
+                best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
+                fit_val = f"{f_raw-100:.1f}%"
+                new_cache_item = {'ticker': ticker, 'best_p': best_p, 'fit': fit_val}
+            else: # DAILY
+                if ticker in cache_df.index:
+                    best_p = int(cache_df.loc[ticker, 'best_p'])
+                    fit_val = cache_df.loc[ticker, 'fit']
+
+            low_20 = df['Low'].tail(20).min()
+            target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
+            ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
+            status = "✅強勢" if last_p > ma_val else "❌弱勢"
+            is_red = last_p > last['Open']
+            signal = "🟢🟢 埋伏" if (is_red and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
+            stock_name = get_stock_name(ticker)
+            display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
+            
+            return {"status": "success", "data": {"name": display_name, "p": f"{best_p}d", "fit": fit_val,
+                           "price": f"{last_p:.1f}", "target": target_1382, "status": status,
+                           "signal": signal, "sector": get_sector_label(ticker)}, "cache": new_cache_item}
         
-        # *** THE FINAL, CORRECTED CHECK ***
-        # This handles all cases (single/multi-ticker, empty, all-NaN) correctly.
-        if all_data_raw.empty or all_data_raw['Close'].isnull().values.all():
-             logging.warning("Batch download returned no valid data. Forcing fallback.")
-             all_data = None # Force fallback
-        else:
-             all_data = all_data_raw
+        except Exception as e:
+            logging.error(f"THREAD ERROR on {ticker}: {e}", exc_info=False)
+            return {"status": "error", "data": {"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"}, "cache": None}
 
-    except Exception as e:
-        logging.warning(f"Batch download raised an exception: {e}. Falling back to ROBUST individual downloads.")
-        all_data = None
+    # Using ThreadPoolExecutor to run downloads in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # map() returns results in the order the futures were started
+        future_to_ticker = {executor.submit(fetch_and_analyze_ticker, ticker): ticker for ticker in targets}
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            results_agg.append(future.result())
 
-    def analyze_ticker(ticker, df):
-        nonlocal results, new_cache, cache_df, analysis_mode
-        last = df.iloc[-1]
-        last_p = float(last['Close'])
-        best_p, fit_val = 20, "N/A"
-        if analysis_mode == 'WEEKLY':
-            battle = []
-            for p in [10, 20, 60]:
-                df_strat = df[['Close']].copy()
-                df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
-                df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
-                df_strat['signal_change'] = df_strat['above_ma'].diff()
-                df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
-                df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
-                trade_profits_pct = ((df_strat[df_strat['signal_change'] == -1]['Close'] - df_strat[df_strat['signal_change'] == -1]['entry_price_held']) / df_strat[df_strat['signal_change'] == -1]['entry_price_held'] - 0.004).tolist()
-                if df_strat['above_ma'].iloc[-1] == 1:
-                    last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
-                    if not last_buy_idx.empty:
-                        entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
-                        exit_price_open = df_strat['Close'].iloc[-1]
-                        if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
-                current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
-                battle.append((p, current_capital))
-            best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
-            fit_val = f"{f_raw-100:.1f}%"
-            new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
-        else: # DAILY
-            if ticker in cache_df.index:
-                best_p = int(cache_df.loc[ticker, 'best_p'])
-                fit_val = cache_df.loc[ticker, 'fit']
-        low_20 = df['Low'].tail(20).min()
-        target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
-        ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
-        status = "✅強勢" if last_p > ma_val else "❌弱勢"
-        is_red = last_p > last['Open']
-        signal = "🟢🟢 埋伏" if (is_red and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
-        stock_name = get_stock_name(ticker)
-        display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
-        results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
-                       "price": f"{last_p:.1f}", "target": target_1382, "status": status,
-                       "signal": signal, "sector": get_sector_label(ticker)})
-
-    if all_data is not None:
-        logging.info("FAST PATH: Processing all tickers from batch download.")
-        for ticker in targets:
-            try:
-                df = all_data.loc[:, (slice(None), ticker)].copy()
-                df.columns = df.columns.droplevel(1)
-                df = df.dropna()
-                if df.empty: raise ValueError(f"No data for {ticker} in batch.")
-                analyze_ticker(ticker, df)
-            except Exception as e:
-                logging.error(f"CRITICAL ERROR on {ticker} in {mode} (fast path): {e}", exc_info=False)
-                results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
-                continue
-    else:
-        logging.info("ROBUST PATH: Processing tickers individually due to batch failure.")
-        for ticker in targets:
-            try:
-                logging.info(f"Downloading data for single ticker: {ticker}")
-                df = yf.download(ticker, period=period, progress=False, auto_adjust=False, timeout=15)
-                df = df.dropna()
-                if df.empty: raise ValueError(f"No data for {ticker} after individual download.")
-                analyze_ticker(ticker, df)
-                time.sleep(0.5)
-            except Exception as e:
-                logging.error(f"CRITICAL ERROR on {ticker} in {mode} (robust path): {e}", exc_info=False)
-                results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
-                continue
+    # Process results
+    results, new_cache = [], []
+    for res in results_agg:
+        results.append(res['data'])
+        if res['cache']:
+            new_cache.append(res['cache'])
     
     if new_cache:
+        logging.info(f"Updating gene cache with {len(new_cache)} new entries.")
         new_df = pd.DataFrame(new_cache).set_index('ticker')
-        combined_df = pd.concat([cache_df, new_df])
-        updated_cache_df = combined_df[~combined_df.index.duplicated(keep='last')]
+        # Use concat and drop duplicates to update existing entries and add new ones
+        updated_cache_df = pd.concat([cache_df, new_df])
+        updated_cache_df = updated_cache_df[~updated_cache_df.index.duplicated(keep='last')]
         updated_cache_df.to_csv(GENE_CACHE_FILE)
         
     return results, scan_time, analysis_mode
 
-# ================= 3. Flask Web Routes =================
+# ================= 3. Flask Web Routes (Unchanged) =================
 @app.route('/')
 def index():
     return render_template('index.html')
