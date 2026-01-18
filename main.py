@@ -1,4 +1,4 @@
-# TRIUMPH PROTOCOL - The Final, Correct, and Stable Solution
+# PHOENIX PROTOCOL - The Final, Correct, and Stable Solution with Dynamic IPs
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -9,22 +9,29 @@ import numpy as np
 import io
 import logging
 import pytz
-import concurrent.futures
-
-# ================= Bright Data Proxy Setup (TRIUMPH) =================
-# The ONLY confirmed working method in Vercel.
-# We explicitly pass the proxy to the yf.download function.
-PROXY_USERNAME = "brd-customer-hl_a9437f18-zone-residential_proxy1"
-PROXY_PASSWORD = "fi5sx9h4kzl6"
-PROXY_HOST = "brd.superproxy.io"
-PROXY_PORT = 33335
-PROXY_URL = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
-
-# Environment variables are no longer trusted and are removed.
-logging.info(">>>>>[TRIUMPH PROTOCOL ENGAGED] All systems unified under yf.download with explicit proxy.<<<<<")
+import random
+import string
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# ================= Bright Data Proxy Setup (PHOENIX) =================
+# We now understand the enemy: IP rate-limiting.
+# The solution is to generate a new session ID for each major operation,
+# forcing Bright Data to give us a new, clean exit IP.
+PROXY_USERNAME_BASE = "brd-customer-hl_a9437f18-zone-residential_proxy1"
+PROXY_PASSWORD = "fi5sx9h4kzl6"
+PROXY_HOST = "brd.superproxy.io"
+PROXY_PORT = 33335
+
+def get_dynamic_proxy_url():
+    session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    proxy_username = f'{PROXY_USERNAME_BASE}-session-{session_id}'
+    proxy_url = f"http://{proxy_username}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
+    logging.info(f"Generated new PHOENIX proxy URL with session: {session_id}")
+    return proxy_url
+
+logging.info(">>>>>[PHOENIX PROTOCOL ENGAGED] Dynamic IP strategy is active.<<<<<")
 
 # ================= Flask App Initialization =================
 app = Flask(__name__)
@@ -33,9 +40,6 @@ app = Flask(__name__)
 WATCHLIST_FILE = "/tmp/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "/tmp/market_scan_list.txt"
 GENE_CACHE_FILE = "/tmp/基因快取.csv"
-
-# get_stock_name is DECOMMISSIONED. It used yf.Ticker, which is unreliable in Vercel.
-# We will use the ticker symbol directly for display.
 
 def get_taipei_time_str():
     try:
@@ -63,9 +67,11 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Engine (TRIUMPH PROTOCOL) =================
-# This is the completely refactored, stable, and correct core engine.
+# ================= 2. Core Engine (PHOENIX PROTOCOL) =================
 def run_stable_hunter(mode='DAILY'):
+    # PHOENIX: Get a new proxy URL for every single run.
+    PHOENIX_PROXY_URL = get_dynamic_proxy_url()
+
     init_system_files()
     scan_time = get_taipei_time_str()
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
@@ -82,7 +88,6 @@ def run_stable_hunter(mode='DAILY'):
     with open(list_file, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     
-    # CRITICAL: Remove ^TWII for stability if it's not the only target
     if len(targets) > 1 and "^TWII" in targets:
         targets.remove("^TWII")
         logging.info("Removed ^TWII from multi-stock scan for stability.")
@@ -96,62 +101,49 @@ def run_stable_hunter(mode='DAILY'):
     except (FileNotFoundError, pd.errors.EmptyDataError):
         cache_df = pd.DataFrame(columns=['ticker', 'best_p', 'fit']).set_index('ticker')
 
-    # Unified Data Download
     period = "5y" if analysis_mode == 'WEEKLY' else ("2d" if mode == 'QUICK_SCAN' else "60d")
     all_data = None
     try:
-        logging.info(f"Executing unified download for {len(targets)} targets with period '{period}'...")
+        logging.info(f"Executing PHOENIX download for {len(targets)} targets with period '{period}'...")
         all_data = yf.download(
             tickers=targets,
             period=period,
             auto_adjust=False,
-            proxy=PROXY_URL,
-            timeout=90, # Increased timeout for potentially large downloads
-            group_by='ticker' if len(targets) > 1 else None # Use group_by for multi, standard for single
+            proxy=PHOENIX_PROXY_URL, # Use the new dynamic URL
+            timeout=90,
+            group_by='ticker' if len(targets) > 1 else None
         )
         if all_data.empty:
-            raise ValueError("yf.download returned an empty DataFrame.")
-        logging.info("Unified download successful.")
+            raise ValueError("yf.download returned an empty DataFrame. The proxy IP may have been blocked.")
+        logging.info("PHOENIX download successful.")
     except Exception as e:
-        logging.error(f"FATAL: Unified yf.download failed: {e}", exc_info=True)
+        logging.error(f"FATAL: PHOENIX download failed: {e}", exc_info=True)
         error_results = [{"name": f"分析失敗: {t}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"} for t in targets]
         return error_results, scan_time, analysis_mode, list_file
 
     results = []
     new_cache = []
 
-    # Unified Analysis Loop
     for ticker in targets:
         try:
-            # Select the dataframe for the current ticker
-            if len(targets) > 1:
-                df = all_data[ticker]
-            else: # If only one ticker, the structure is flat
-                df = all_data
-
-            if df.empty or df.isnull().all().all():
-                raise ValueError("DataFrame for this ticker is empty or all NaN.")
+            df = all_data[ticker] if len(targets) > 1 else all_data
+            if df.empty or df.isnull().all().all(): raise ValueError("DataFrame for this ticker is empty.")
             df.dropna(inplace=True)
-            if df.empty:
-                raise ValueError("DataFrame is empty after dropping NaNs.")
+            if df.empty: raise ValueError("DataFrame is empty after dropping NaNs.")
 
-            # QUICK_SCAN logic
             if mode == 'QUICK_SCAN':
                 if len(df) < 2: continue
                 last_day = df.iloc[-1]
                 prev_day = df.iloc[-2]
                 is_red = last_day['Close'] > last_day['Open']
                 is_volume_up = last_day['Volume'] > (prev_day['Volume'] * 1.2)
-                if not (is_red and is_volume_up):
-                    continue # Skip to next ticker if it doesn't meet quick scan criteria
+                if not (is_red and is_volume_up): continue
             
-            # --- Standard Analysis Logic ---
             last = df.iloc[-1]
             last_p = float(last['Close'])
             best_p, fit_val = 20, "N/A"
 
             if analysis_mode == 'WEEKLY':
-                # (The same robust weekly backtest logic as before)
                 battle = []
                 for p in [10, 20, 60]:
                     df_strat = df[['Close']].copy()
@@ -189,8 +181,6 @@ def run_stable_hunter(mode='DAILY'):
             status = "✅強勢" if last_p > ma_val else "❌弱勢"
             is_red_signal = last_p > last['Open']
             signal = "🟢🟢 埋伏" if (is_red_signal and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
-            
-            # TRIUMPH: Use ticker directly, no more get_stock_name
             display_name = f"{get_sector_label(ticker)}{ticker}"
 
             results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
@@ -202,7 +192,6 @@ def run_stable_hunter(mode='DAILY'):
             results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
             continue
     
-    # Unified Cache Update
     if new_cache:
         logging.info(f"Updating gene cache with {len(new_cache)} new entries.")
         new_df = pd.DataFrame(new_cache).set_index('ticker')
@@ -211,14 +200,13 @@ def run_stable_hunter(mode='DAILY'):
         
     return results, scan_time, analysis_mode, list_file
 
-# ================= 3. Flask Web Routes (TRIUMPH PROTOCOL) =================
+# ================= 3. Flask Web Routes (PHOENIX PROTOCOL) =================
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/run/<mode>')
 def run_analysis(mode):
-    # TRIUMPH: Define titles here for clarity
     mode_upper = mode.upper()
     titles = {
         'QUICK_SCAN': '⚡ 市場趨勢快速掃描結果',
@@ -229,7 +217,6 @@ def run_analysis(mode):
     }
     title = titles.get(mode_upper, '📊 分析結果')
 
-    # For QUICK_SCAN, we now run the main engine with a specific mode
     data, scan_time, analysis_mode, list_file = run_stable_hunter(mode=mode_upper)
     error_flag = any("ERROR" in r.get("sector", "") for r in data)
     
@@ -252,7 +239,9 @@ def run_analysis(mode):
     if mode_upper == 'WEEKLY':
         report_info = "每週分析完成，基因快取已更新。"
     elif mode_upper == 'QUICK_SCAN':
-        report_info = f"掃描完成，發現 {len(data)} 個符合「紅K帶量」的潛力目標。"
+        # Filter out errors before counting for a more accurate report
+        successful_targets = [d for d in data if d.get("sector") != "ERROR"]
+        report_info = f"掃描完成，發現 {len(successful_targets)} 個符合「紅K帶量」的潛力目標。"
     
     if error_flag:
         report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
@@ -277,8 +266,7 @@ def manage_watchlist():
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(content)
 
     tickers = [l.strip() for l in content.splitlines() if l.strip() and not l.startswith("#")]
-    # TRIUMPH: Removed get_stock_name. Just show the ticker.
-    ticker_details = [{'ticker': t, 'name': t} for t in tickers]
+    ticker_details = [{'ticker': t, 'name': t} for t in tickers] # Removed get_stock_name
     
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
