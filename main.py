@@ -20,12 +20,9 @@ PROXY_PORT = 33335
 PROXY_URL = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
 
 # 設定 yfinance 使用我們的秘密通道
-yf.pdr_override() # 這是舊版的方式，新版 yfinance 已不推薦
-# 新版 yfinance/requests-cache 會自動偵測 HTTP_PROXY/HTTPS_PROXY 環境變數
-# 我們在程式啟動時就設定好它
 os.environ['HTTP_PROXY'] = PROXY_URL
 os.environ['HTTPS_PROXY'] = PROXY_URL
-logging.info(">>>>>>[SECRET CHANNEL ESTABLISHED] Proxy environment variables set. AI Hunter is now cloaked.<<<<<<")
+logging.info(">>>>>[SECRET CHANNEL ESTABLISHED] Proxy environment variables set. AI Hunter is now cloaked.<<<<<<")
 
 
 # ================= Logging Setup =================
@@ -34,10 +31,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ================= Flask App Initialization =================
 app = Flask(__name__)
 
-# ================= 1. Core Files & Helper Logic =================
-WATCHLIST_FILE = "src/我的自選清單.txt"
-MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
-GENE_CACHE_FILE = "src/基因快取.csv"
+# ================= 1. Core Files & Helper Logic (Vercel Compatible) =================
+# Vercel 的臨時文件系統需要我們使用 /tmp 目錄進行任何寫入操作。
+WATCHLIST_FILE = "/tmp/我的自選清單.txt"
+MARKET_SCAN_LIST_FILE = "/tmp/market_scan_list.txt"
+GENE_CACHE_FILE = "/tmp/基因快取.csv"
+
 
 def get_stock_name(ticker):
     try:
@@ -68,8 +67,8 @@ def get_sector_label(t):
     return "[熱門]"
 
 def init_system_files():
-    if not os.path.exists("src/"):
-        os.makedirs("src/")
+    # 我們不能在 Vercel 的唯讀文件系統上創建目錄，所以我們使用 /tmp。
+    # 創建 'src' 目錄的操作已被移除。
     if not os.path.exists(MARKET_SCAN_LIST_FILE):
         default_list = ["^TWII", "3481.TW", "2409.TW", "3260.TWO", "2408.TW", "1513.TW", "1519.TW", "2330.TW", "2317.TW", "3017.TW", "2454.TW"]
         with open(MARKET_SCAN_LIST_FILE, "w", encoding="utf-8") as f:
@@ -85,46 +84,40 @@ def quick_trend_scan():
     2. 篩選出真正「價量俱揚」的強勢潛力股
     3. 返回一個精簡後的目標清單
     """
+    init_system_files() # 確保 /tmp 中的列表存在
     try:
-        logging.info(">>>>>>[QUICK SCAN INITIATED] Launching new quick trend scan weapon...<<<<<<")
-        # 這裡我們需要一個全市場的股票清單，暫時用 market_scan_list.txt 替代
-        # 未來可以擴充成從證交所API獲取完整列表
+        logging.info(">>>>>[QUICK SCAN INITIATED] Launching new quick trend scan weapon...<<<<<<")
         with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
             full_market_list = [l.strip() for l in f if l.strip() and not l.startswith("#") and l.strip() != "^TWII"]
 
         if not full_market_list:
             return ["2330.TW"] # 如果列表為空，返回一個預設目標
 
-        # 低成本抓取近兩日數據
-        # yf.download 會自動使用我們設定的代理
         data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True)
 
         potential_targets = []
         for ticker in full_market_list:
             try:
-                df = data[ticker]
-                if len(df) < 2: continue
+                # 在 Vercel 環境中，某些股票的數據格式可能不同
+                df = data.get(ticker)
+                if df is None or len(df) < 2: continue
 
                 last_day = df.iloc[-1]
                 prev_day = df.iloc[-2]
 
-                # 核心篩選邏輯：今日收紅、成交量是昨日1.2倍以上
                 is_red = last_day['Close'] > last_day['Open']
                 is_volume_up = last_day['Volume'] > (prev_day['Volume'] * 1.2)
 
                 if is_red and is_volume_up:
                     potential_targets.append(ticker)
-            except (KeyError, IndexError):
-                # 某些股票可能沒有足夠的數據，忽略它們
+            except (KeyError, IndexError, TypeError):
                 continue
 
         logging.info(f">>>>>>[QUICK SCAN REPORT] Found {len(potential_targets)} potential targets: {potential_targets}<<<<<<")
-        # 如果沒有找到任何目標，至少分析大盤，避免返回空結果
         return potential_targets if potential_targets else ["^TWII"]
 
     except Exception as e:
         logging.error(f"Quick trend scan failed: {e}. Falling back to default list.")
-        # 如果掃描失敗，返回一個安全的預設列表
         return ["2330.TW", "2454.TW", "3481.TW"]
 
 
@@ -137,13 +130,13 @@ def run_stable_hunter(mode='DAILY'):
     is_market_scan = mode.startswith('MARKET')
     
     if mode == 'QUICK_SCAN':
-        # 如果是快速掃描模式，目標列表由新武器提供
         targets = quick_trend_scan()
-        list_file = "動態產生" # 標示來源
+        list_file = "動態產生" 
     else:
         list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
-        if not is_market_scan and not os.path.exists(WATCHLIST_FILE):
-             with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
+        if not os.path.exists(list_file):
+             # 確保在讀取前創建文件
+             with open(list_file, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股\n")
 
         with open(list_file, "r", encoding="utf-8") as f:
             targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
@@ -164,16 +157,12 @@ def run_stable_hunter(mode='DAILY'):
             logging.info(f"THREAD: Fetching data for {ticker} via proxy.")
             
             ticker_obj = yf.Ticker(ticker)
-            # 所有的網路請求都會自動通過我們設定的代理
             df = ticker_obj.history(period=period, auto_adjust=False, timeout=20)
             
-            if df.empty:
-                raise ValueError("Downloaded DataFrame is empty.")
+            if df.empty: raise ValueError("Downloaded DataFrame is empty.")
             df.dropna(inplace=True)
-            if df.empty:
-                raise ValueError("DataFrame is empty after dropping NaNs.")
+            if df.empty: raise ValueError("DataFrame is empty after dropping NaNs.")
 
-            # --- Analysis Logic (完全不變) ---
             last = df.iloc[-1]
             last_p = float(last['Close'])
             best_p, fit_val = 20, "N/A"
@@ -193,9 +182,8 @@ def run_stable_hunter(mode='DAILY'):
                     df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
                     
                     trades = df_strat[df_strat['signal_change'] == -1]
-                    if trades.empty or trades['entry_price_held'].isnull().all():
-                         trade_profits_pct = []
-                    else:
+                    trade_profits_pct = []
+                    if not trades.empty and not trades['entry_price_held'].isnull().all():
                          trade_profits_pct = ((trades['Close'] - trades['entry_price_held']) / trades['entry_price_held'] - 0.004).tolist()
 
                     if not df_strat.empty and df_strat['above_ma'].iloc[-1] == 1:
@@ -261,7 +249,6 @@ def index():
 
 @app.route('/run/<mode>')
 def run_analysis(mode):
-    # 將新的快速掃描模式傳遞給核心引擎
     data, scan_time, analysis_mode, list_file = run_stable_hunter(mode=mode.upper())
     error_flag = any("ERROR" in r.get("sector", "") for r in data)
     
@@ -280,7 +267,7 @@ def run_analysis(mode):
             final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
 
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
-    report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
+    report_info = "每週分析完成，基因快取已更新。 (註：Vercel 暫存資料)" if analysis_mode == 'WEEKLY' else ""
     if mode.upper() == 'QUICK_SCAN':
         report_info = f"市場趨勢快速掃描完成，發現 {len(data)} 個潛力目標。"
     if error_flag:
@@ -295,16 +282,19 @@ def select_watchlist_analysis():
 
 @app.route('/watchlist', methods=['GET', 'POST'])
 def manage_watchlist():
-    init_system_files()
-    if not os.path.exists(WATCHLIST_FILE):
-         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
+    init_system_files() # 確保 /tmp 中的文件存在
 
     if request.method == 'POST':
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(request.form['watchlist_content'])
         return redirect(url_for('manage_watchlist'))
     
-    with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
-    
+    try:
+        with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
+    except FileNotFoundError:
+        # 如果文件不存在，創建一個空的
+        content = "# 請在此輸入您的自選股\n"
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(content)
+
     tickers = [l.strip() for l in content.splitlines() if l.strip() and not l.startswith("#")]
     ticker_details = [{'ticker': t, 'name': get_stock_name(t)} for t in tickers]
     
