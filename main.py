@@ -1,4 +1,4 @@
-# PHOENIX PROTOCOL v1.1 - Proxy Enabled & Engine Fixes
+# DIRECT STRIKE PROTOCOL - The Last Stand. No Proxies.
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -13,7 +13,7 @@ import pytz
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-logging.info(">>>>>[PHOENIX PROTOCOL ENGAGED] All data requests will be routed through Bright Data proxy.<<<<<")
+logging.info(">>>>>[DIRECT STRIKE PROTOCOL ENGAGED] All proxies have been disabled. Attempting direct connection.<<<<<")
 
 # ================= Flask App Initialization =================
 app = Flask(__name__)
@@ -22,7 +22,6 @@ app = Flask(__name__)
 WATCHLIST_FILE = "/tmp/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "/tmp/market_scan_list.txt"
 GENE_CACHE_FILE = "/tmp/基因快取.csv"
-PROXY_STRING = "http://brd-customer-hl_a9437f18-zone-residential_proxy1:fi5sx9h4kzl6@brd.superproxy.io:33335"
 
 def get_taipei_time_str():
     try:
@@ -50,26 +49,30 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Engine (PHOENIX PROTOCOL v1.1) =================
+# ================= 2. Core Engine (DIRECT STRIKE PROTOCOL) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
     is_market_scan = mode.startswith('MARKET') or mode == 'QUICK_SCAN'
 
-    list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
+    if mode == 'QUICK_SCAN':
+        list_file = MARKET_SCAN_LIST_FILE
+    else:
+        list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
+
     if not os.path.exists(list_file):
         with open(list_file, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股\n")
 
     with open(list_file, "r", encoding="utf-8") as f:
         targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     
-    is_single_target = len(targets) == 1
-    if not is_single_target and "^TWII" in targets:
+    if len(targets) > 1 and "^TWII" in targets:
         targets.remove("^TWII")
-        is_single_target = len(targets) == 1
+        logging.info("Removed ^TWII from multi-stock scan for stability.")
         
     if not targets:
+        logging.warning("No targets found for analysis. Returning empty results.")
         return [], scan_time, analysis_mode, list_file
 
     try:
@@ -80,13 +83,20 @@ def run_stable_hunter(mode='DAILY'):
     period = "5y" if analysis_mode == 'WEEKLY' else ("2d" if mode == 'QUICK_SCAN' else "60d")
     all_data = None
     try:
-        logging.info(f"Executing PHOENIX PROTOCOL download via proxy for {len(targets)} targets with period '{period}'...")
-        all_data = yf.download(tickers=targets, period=period, auto_adjust=False, proxy=PROXY_STRING, timeout=60, group_by='ticker' if not is_single_target else None)
+        logging.info(f"Executing DIRECT STRIKE download for {len(targets)} targets with period '{period}'...")
+        all_data = yf.download(
+            tickers=targets,
+            period=period,
+            auto_adjust=False,
+            proxy=None, # DIRECT STRIKE: No proxy is used.
+            timeout=60,
+            group_by='ticker' if len(targets) > 1 else None
+        )
         if all_data.empty:
-            raise ValueError("yf.download returned an empty DataFrame. The proxy may be failing or the ticker is invalid.")
-        logging.info("PHOENIX PROTOCOL download successful.")
+            raise ValueError("yf.download returned an empty DataFrame. Vercel\'s native IP may be blocked or rate-limited.")
+        logging.info("DIRECT STRIKE download successful.")
     except Exception as e:
-        logging.error(f"FATAL: PHOENIX PROTOCOL download failed: {e}", exc_info=True)
+        logging.error(f"FATAL: DIRECT STRIKE download failed: {e}", exc_info=True)
         error_results = [{"name": f"分析失敗: {t}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"} for t in targets]
         return error_results, scan_time, analysis_mode, list_file
 
@@ -95,68 +105,51 @@ def run_stable_hunter(mode='DAILY'):
 
     for ticker in targets:
         try:
-            df = all_data if is_single_target else all_data[ticker]
+            df = all_data[ticker] if len(targets) > 1 else all_data
             if df.empty or df.isnull().all().all(): raise ValueError("DataFrame for this ticker is empty.")
             df.dropna(inplace=True)
             if df.empty: raise ValueError("DataFrame is empty after dropping NaNs.")
 
             if mode == 'QUICK_SCAN':
                 if len(df) < 2: continue
-                last_day, prev_day = df.iloc[-1], df.iloc[-2]
-                if not (last_day['Close'] > last_day['Open'] and last_day['Volume'] > (prev_day['Volume'] * 1.2)): continue
+                last_day = df.iloc[-1]
+                prev_day = df.iloc[-2]
+                is_red = last_day['Close'] > last_day['Open']
+                is_volume_up = last_day['Volume'] > (prev_day['Volume'] * 1.2)
+                if not (is_red and is_volume_up): continue
             
-            last_p = float(df.iloc[-1]['Close'])
+            last = df.iloc[-1]
+            last_p = float(last['Close'])
             best_p, fit_val = 20, "N/A"
 
             if analysis_mode == 'WEEKLY':
-                # PHOENIX FIX 1: Check for sufficient data history
-                if len(df) < 120: # At least ~6 months of data for a meaningful test
-                    fit_val = "數據不足"
-                    new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
-                else:
-                    battle = []
-                    for p in [10, 20, 60]:
-                        df_strat = df[['Close']].copy()
-                        df_strat['ma'] = df_strat['Close'].rolling(p).mean()
-                        if df_strat['ma'].isnull().all(): continue
-                        df_strat.dropna(inplace=True)
-                        df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
-                        df_strat['signal_change'] = df_strat['above_ma'].diff()
-                        
-                        trade_profits_pct = []
-                        if 1 in df_strat['signal_change'].values: # Has at least one buy signal
-                            df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
-                            df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
-                            trades = df_strat[df_strat['signal_change'] == -1]
-                            if not trades.empty and not trades['entry_price_held'].isnull().all():
-                                 trade_profits_pct.extend(((trades['Close'] - trades['entry_price_held']) / trades['entry_price_held'] - 0.004).tolist())
-
-                        if df_strat['above_ma'].iloc[-1] == 1:
-                            last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
-                            if not last_buy_idx.empty:
-                                entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
-                                exit_price_open = df_strat['Close'].iloc[-1]
-                                if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
-                        
-                        # PHOENIX FIX 2: Handle no-trade scenarios
-                        if not trade_profits_pct:
-                            battle.append((p, "無交易"))
-                        else:
-                            current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
-                            battle.append((p, current_capital))
-                    
-                    if not battle:
-                        best_p, fit_val = 20, "回測失敗"
-                    else:
-                        # Filter out "無交易" before sorting if possible
-                        valid_battles = [b for b in battle if isinstance(b[1], (int, float))]
-                        if not valid_battles:
-                            best_p, fit_val = 20, "無交易"
-                        else:
-                            best_p, f_raw = sorted(valid_battles, key=lambda x: x[1], reverse=True)[0]
-                            fit_val = f"{f_raw-100:.1f}%"
-                    new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
-            else:
+                battle = []
+                for p in [10, 20, 60]:
+                    df_strat = df[['Close']].copy()
+                    df_strat['ma'] = df_strat['Close'].rolling(p).mean()
+                    df_strat.dropna(inplace=True)
+                    if df_strat.empty: continue
+                    df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
+                    df_strat['signal_change'] = df_strat['above_ma'].diff()
+                    df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
+                    df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
+                    trades = df_strat[df_strat['signal_change'] == -1]
+                    trade_profits_pct = []
+                    if not trades.empty and not trades['entry_price_held'].isnull().all():
+                         trade_profits_pct = ((trades['Close'] - trades['entry_price_held']) / trades['entry_price_held'] - 0.004).tolist()
+                    if not df_strat.empty and df_strat['above_ma'].iloc[-1] == 1:
+                        last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
+                        if not last_buy_idx.empty:
+                            entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
+                            exit_price_open = df_strat['Close'].iloc[-1]
+                            if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
+                    current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
+                    battle.append((p, current_capital))
+                if not battle: raise ValueError("Could not perform weekly backtest.")
+                best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
+                fit_val = f"{f_raw-100:.1f}%"
+                new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
+            else: # DAILY
                 if ticker in cache_df.index:
                     best_p = int(cache_df.loc[ticker, 'best_p'])
                     fit_val = cache_df.loc[ticker, 'fit']
@@ -165,12 +158,13 @@ def run_stable_hunter(mode='DAILY'):
             target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
             ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
             status = "✅強勢" if last_p > ma_val else "❌弱勢"
-            is_red_signal = last_p > df.iloc[-1]['Open']
-            is_vol_up = len(df['Volume']) > 1 and df.iloc[-1]['Volume'] > df.iloc[-2]['Volume']
-            signal = "🟢🟢 埋伏" if is_red_signal and is_vol_up and status == "✅強勢" else "⚪ 觀察"
+            is_red_signal = last_p > last['Open']
+            signal = "🟢🟢 埋伏" if (is_red_signal and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
             display_name = f"{get_sector_label(ticker)}{ticker}"
 
-            results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val, "price": f"{last_p:.1f}", "target": target_1382, "status": status, "signal": signal, "sector": get_sector_label(ticker)})
+            results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
+                           "price": f"{last_p:.1f}", "target": target_1382, "status": status,
+                           "signal": signal, "sector": get_sector_label(ticker)})
 
         except Exception as e:
             logging.error(f"ANALYSIS ERROR on {ticker}: {e}", exc_info=False)
@@ -185,7 +179,7 @@ def run_stable_hunter(mode='DAILY'):
         
     return results, scan_time, analysis_mode, list_file
 
-# ================= 3. Flask Web Routes (PHOENIX PROTOCOL v1.1) =================
+# ================= 3. Flask Web Routes (DIRECT STRIKE PROTOCOL) =================
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -193,13 +187,20 @@ def index():
 @app.route('/run/<mode>')
 def run_analysis(mode):
     mode_upper = mode.upper()
-    titles = {'QUICK_SCAN': '⚡ 市場趨勢快速掃描結果', 'MARKET': '📡 市場即時掃描結果 (強勢股)', 'MARKET_BACKTEST': '🧠 全市場潛力股策略回測', 'DAILY': '🔥 自選股每日追蹤', 'WEEKLY': '🏥 自選股策略回測'}
+    titles = {
+        'QUICK_SCAN': '⚡ 市場趨勢快速掃描結果',
+        'MARKET': '📡 市場即時掃描結果 (強勢股)',
+        'MARKET_BACKTEST': '🧠 全市場潛力股策略回測',
+        'DAILY': '🔥 自選股每日追蹤',
+        'WEEKLY': '🏥 自選股策略回測'
+    }
     title = titles.get(mode_upper, '📊 分析結果')
+
     data, scan_time, analysis_mode, list_file = run_stable_hunter(mode=mode_upper)
     error_flag = any("ERROR" in r.get("sector", "") for r in data)
     
     if mode_upper == 'MARKET_BACKTEST' and not error_flag:
-        data.sort(key=lambda r: float(r['fit'].replace('%', '')) if isinstance(r.get('fit'), str) and '%' in r['fit'] else -9999, reverse=True)
+        data.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
 
     buys = [r['sector'] for r in data if r.get('signal') == "🟢🟢 埋伏" and r.get('sector') != "[熱門]" and not "ERROR" in r.get('sector', "")]
     final_table = []
@@ -217,8 +218,10 @@ def run_analysis(mode):
     if mode_upper == 'WEEKLY':
         report_info = "每週分析完成，基因快取已更新。"
     elif mode_upper == 'QUICK_SCAN':
+        # Filter out errors before counting for a more accurate report
         successful_targets = [d for d in data if d.get("sector") != "ERROR"]
-        report_info = f"掃描完成，發現 {len(successful_targets)} 個出現「紅K帶量」短期訊號的目標。請結合「狀態」欄位判斷主要趨勢。"
+        report_info = f"掃描完成，發現 {len(successful_targets)} 個符合「紅K帶量」的潛力目標。"
+    
     if error_flag:
         report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
 
@@ -234,30 +237,43 @@ def manage_watchlist():
     if request.method == 'POST':
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(request.form['watchlist_content'])
         return redirect(url_for('manage_watchlist'))
+    
     try:
         with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: content = f.read()
     except FileNotFoundError:
-        content = "# 請在此輸入您的自選股\n2330.TW\n"
+        content = "# 請在此輸入您的自選股\n2330.TW\n" # Default content
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(content)
+
     tickers = [l.strip() for l in content.splitlines() if l.strip() and not l.startswith("#")]
-    ticker_details = [{'ticker': t, 'name': t} for t in tickers]
+    ticker_details = [{'ticker': t, 'name': t} for t in tickers] # Removed get_stock_name
+    
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
 @app.route('/download/<mode>')
 def download_csv(mode):
     results, _, _, _ = run_stable_hunter(mode=mode.upper())
+    
     if any("ERROR" in r.get("sector", "") for r in results):
         headers = ["分析狀態", "詳細錯誤"]
         csv_data = [[r['name'], r.get('order_error', 'N/A')] for r in results]
     else:
         headers = ["標的", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號"]
-        csv_data = [[r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal']] for r in results]
+        csv_data = []
+        for r in results:
+            csv_data.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal']])
+
     df = pd.DataFrame(csv_data, columns=headers)
+    
     output = io.BytesIO()
     df.to_csv(output, index=False, encoding='utf-8-sig')
     output.seek(0)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename={mode.lower()}_scan_{timestamp}.csv"})
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename={mode.lower()}_scan_{timestamp}.csv"}
+    )
 
 # ================= Main Entry Point for Local Server =================
 if __name__ == '__main__':
