@@ -20,7 +20,6 @@ WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-# Robust stock name fetching using yfinance only (Vercel compatible)
 def get_stock_name(ticker):
     try:
         info = yf.Ticker(ticker).info
@@ -30,7 +29,6 @@ def get_stock_name(ticker):
         logging.error(f"yfinance lookup failed for {ticker}: {e}. Returning original ticker.")
         return ticker
 
-# Secure Taipei time fetching with fallback
 def get_taipei_time_str():
     try:
         taipei_tz = pytz.timezone('Asia/Taipei')
@@ -41,7 +39,6 @@ def get_taipei_time_str():
         logging.warning(f"pytz lookup for Taipei time failed: {e}. Falling back to server time.")
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S (Local)')
 
-# get_sector_label from your V.FINAL.ULTRA
 def get_sector_label(t):
     c = t.split('.')[0]
     if c in ['3481', '2409']: return "[面板]"
@@ -50,7 +47,6 @@ def get_sector_label(t):
     if c in ['2330', '2454', '3017', '2317']: return "[AI核心]"
     return "[熱門]"
 
-# init_system logic from your V.FINAL.ULTRA
 def init_system_files():
     if not os.path.exists("src/"):
         os.makedirs("src/")
@@ -61,7 +57,7 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Stock Analysis Engine (Vercel Optimized) =================
+# ================= 2. Core Stock Analysis Engine (Now with Robust Fallback) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -83,65 +79,96 @@ def run_stable_hunter(mode='DAILY'):
     except (FileNotFoundError, pd.errors.EmptyDataError):
         cache_df = pd.DataFrame(columns=['ticker', 'best_p', 'fit']).set_index('ticker')
 
-    # --- Batch Download (Performance Optimization) ---
+    # --- Data Download Section with Fallback ---
     period = "5y" if analysis_mode == 'WEEKLY' else "60d"
-    all_data = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=9, group_by='column')
+    all_data = None
+    try:
+        logging.info(f"Attempting FAST batch download for {len(targets)} tickers...")
+        all_data = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=20, group_by='column')
+        # Critical Check: If batch download returns empty for multiple tickers, it's a failure.
+        if all_data.empty and len(targets) > 1:
+             logging.warning("Batch download returned an empty DataFrame. Forcing fallback to individual downloads.")
+             all_data = None # Force fallback
+    except Exception as e:
+        logging.warning(f"Batch download failed: {e}. Falling back to ROBUST individual downloads.")
+        all_data = None
 
-    for ticker in targets:
-        try:
-            df = all_data.loc[:, (slice(None), ticker)].copy()
-            df.columns = df.columns.droplevel(1)
-            df = df.dropna()
-            if df.empty: raise ValueError(f"No data for {ticker} in batch.")
+    # This is the core analysis logic that will be applied to each ticker
+    def analyze_ticker(ticker, df):
+        nonlocal results, new_cache, cache_df, analysis_mode
+        last = df.iloc[-1]
+        last_p = float(last['Close'])
 
-            last = df.iloc[-1]
-            last_p = float(last['Close'])
+        best_p, fit_val = 20, "N/A"
+        if analysis_mode == 'WEEKLY':
+            battle = []
+            for p in [10, 20, 60]:
+                df_strat = df[['Close']].copy()
+                df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
+                df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
+                df_strat['signal_change'] = df_strat['above_ma'].diff()
+                df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
+                df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
+                trade_profits_pct = ((df_strat[df_strat['signal_change'] == -1]['Close'] - df_strat[df_strat['signal_change'] == -1]['entry_price_held']) / df_strat[df_strat['signal_change'] == -1]['entry_price_held'] - 0.004).tolist()
+                if df_strat['above_ma'].iloc[-1] == 1:
+                    last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
+                    if not last_buy_idx.empty:
+                        entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
+                        exit_price_open = df_strat['Close'].iloc[-1]
+                        if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
+                current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
+                battle.append((p, current_capital))
+            best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
+            fit_val = f"{f_raw-100:.1f}%"
+            new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
+        else: # DAILY
+            if ticker in cache_df.index:
+                best_p = int(cache_df.loc[ticker, 'best_p'])
+                fit_val = cache_df.loc[ticker, 'fit']
 
-            best_p, fit_val = 20, "N/A"
-            if analysis_mode == 'WEEKLY':
-                battle = []
-                for p in [10, 20, 60]:
-                    df_strat = df[['Close']].copy()
-                    df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
-                    df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
-                    df_strat['signal_change'] = df_strat['above_ma'].diff()
-                    df_strat['buy_price'] = np.where(df_strat['signal_change'] == 1, df_strat['Close'], np.nan)
-                    df_strat['entry_price_held'] = df_strat['buy_price'].ffill()
-                    trade_profits_pct = ((df_strat[df_strat['signal_change'] == -1]['Close'] - df_strat[df_strat['signal_change'] == -1]['entry_price_held']) / df_strat[df_strat['signal_change'] == -1]['entry_price_held'] - 0.004).tolist()
-                    if df_strat['above_ma'].iloc[-1] == 1:
-                        last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
-                        if not last_buy_idx.empty:
-                            entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
-                            exit_price_open = df_strat['Close'].iloc[-1]
-                            if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
-                    current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
-                    battle.append((p, current_capital))
-                best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
-                fit_val = f"{f_raw-100:.1f}%"
-                new_cache.append({'ticker': ticker, 'best_p': best_p, 'fit': fit_val})
-            else: # DAILY
-                if ticker in cache_df.index:
-                    best_p = int(cache_df.loc[ticker, 'best_p'])
-                    fit_val = cache_df.loc[ticker, 'fit']
-
-            low_20 = df['Low'].tail(20).min()
-            target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
-            ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
-            status = "✅強勢" if last_p > ma_val else "❌弱勢"
-            is_red = last_p > last['Open']
-            signal = "🟢🟢 埋伏" if (is_red and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
-            
-            stock_name = get_stock_name(ticker)
-            display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
-            
-            results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
-                           "price": f"{last_p:.1f}", "target": target_1382, "status": status,
-                           "signal": signal, "sector": get_sector_label(ticker)})
+        low_20 = df['Low'].tail(20).min()
+        target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
+        ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
+        status = "✅強勢" if last_p > ma_val else "❌弱勢"
+        is_red = last_p > last['Open']
+        signal = "🟢🟢 埋伏" if (is_red and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
         
-        except Exception as e:
-            logging.error(f"CRITICAL ERROR on {ticker} in {mode}: {e}", exc_info=False)
-            results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
-            continue
+        stock_name = get_stock_name(ticker)
+        display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
+        
+        results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
+                       "price": f"{last_p:.1f}", "target": target_1382, "status": status,
+                       "signal": signal, "sector": get_sector_label(ticker)})
+
+    # PATH 1: Fast batch processing
+    if all_data is not None:
+        logging.info("FAST PATH: Processing all tickers from batch download.")
+        for ticker in targets:
+            try:
+                df = all_data.loc[:, (slice(None), ticker)].copy()
+                df.columns = df.columns.droplevel(1)
+                df = df.dropna()
+                if df.empty: raise ValueError(f"No data for {ticker} in batch.")
+                analyze_ticker(ticker, df)
+            except Exception as e:
+                logging.error(f"CRITICAL ERROR on {ticker} in {mode} (fast path): {e}", exc_info=False)
+                results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
+                continue
+    # PATH 2: Robust individual processing (Fallback)
+    else:
+        logging.info("ROBUST PATH: Processing tickers individually due to batch failure.")
+        for ticker in targets:
+            try:
+                logging.info(f"Downloading data for single ticker: {ticker}")
+                df = yf.download(ticker, period=period, progress=False, auto_adjust=False, timeout=15)
+                df = df.dropna()
+                if df.empty: raise ValueError(f"No data for {ticker} after individual download.")
+                analyze_ticker(ticker, df)
+                time.sleep(0.5) # Polite delay to avoid getting blocked
+            except Exception as e:
+                logging.error(f"CRITICAL ERROR on {ticker} in {mode} (robust path): {e}", exc_info=False)
+                results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
+                continue
     
     if new_cache:
         new_df = pd.DataFrame(new_cache).set_index('ticker')
@@ -158,16 +185,17 @@ def index():
 
 @app.route('/run/<mode>')
 def run_analysis(mode):
-    results, scan_time, analysis_mode = run_stable_hunter(mode=mode.upper())
+    data, scan_time, analysis_mode = run_stable_hunter(mode=mode.upper())
+    error_flag = any("ERROR" in r.get("sector", "") for r in data)
+    
+    if mode.upper() == 'MARKET_BACKTEST' and not error_flag:
+        data.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
 
-    if mode.upper() == 'MARKET_BACKTEST':
-        results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
-
-    buys = [r['sector'] for r in results if r.get('signal') == "🟢🟢 埋伏" and r.get('sector') != "[熱門]" and "ERROR" not in r.get('sector',"")]
+    buys = [r['sector'] for r in data if r.get('signal') == "🟢🟢 埋伏" and r.get('sector') != "[熱門]" and not "ERROR" in r.get('sector', "")]
     final_table = []
-    for r in results:
+    for r in data:
         if r.get("sector") == "ERROR":
-            final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], r['order_error']])
+            final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], r.get('order_error', 'Unknown Error')])
         else:
             prefix = "🔥🔥【族群起漲!】" if buys.count(r['sector']) >= 2 and r['sector'] != "[熱門]" else ""
             order = f"{prefix}🎯【買入】看 {r['target']}" if r['signal'] == "🟢🟢 埋伏" else "🚀【持有】"
@@ -176,10 +204,11 @@ def run_analysis(mode):
 
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
-    if any(r.get("sector") == "ERROR" for r in results):
-        report_info = f"偵測到 {sum(1 for r in results if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
+    if error_flag:
+        report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。系統已自動嘗試修復。 " + report_info
 
-    return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time)
+    return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time, error_flag=error_flag)
+
 
 @app.route('/watchlist/select')
 def select_watchlist_analysis():
@@ -201,6 +230,39 @@ def manage_watchlist():
     ticker_details = [{'ticker': t, 'name': get_stock_name(t)} for t in tickers]
     
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
+
+@app.route('/download/<mode>')
+def download_csv(mode):
+    results, _, _ = run_stable_hunter(mode=mode.upper())
+    
+    if any("ERROR" in r.get("sector", "") for r in results):
+        headers = ["分析狀態", "詳細錯誤"]
+        csv_data = [[r['name'], r.get('order_error', 'N/A')] for r in results]
+    else:
+        headers = ["標的", "名稱", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號"]
+        csv_data = []
+        for r in results:
+            try:
+                parts = r['name'].split('(')
+                name_part = parts[0]
+                ticker_part = parts[1].replace(')', '')
+            except:
+                name_part = r['name']
+                ticker_part = 'N/A'
+            csv_data.append([ticker_part, name_part, r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal']])
+
+    df = pd.DataFrame(csv_data, columns=headers)
+    
+    output = io.BytesIO()
+    df.to_csv(output, index=False, encoding='utf-8-sig')
+    output.seek(0)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename={mode.lower()}_scan_{timestamp}.csv"}
+    )
 
 # ================= Main Entry Point for Local Server =================
 if __name__ == '__main__':
