@@ -7,7 +7,6 @@ from datetime import datetime
 import numpy as np
 import io
 import logging
-import twstock
 import pytz
 
 # ================= Logging Setup =================
@@ -21,21 +20,24 @@ WATCHLIST_FILE = "src/我的自選清單.txt"
 MARKET_SCAN_LIST_FILE = "src/market_scan_list.txt"
 GENE_CACHE_FILE = "src/基因快取.csv"
 
-# Secure and multi-layered stock name fetching
+# Robust stock name fetching using yfinance only (Vercel compatible)
 def get_stock_name(ticker):
-    try:
-        stock_code = ticker.split('.')[0]
-        stock = twstock.codes.get(stock_code)
-        if stock:
-            return stock.name
-    except Exception as e:
-        logging.warning(f"twstock lookup failed for {ticker}: {e}. Falling back to yfinance.")
+    """
+    Fetches a stock's name using yfinance.
+    Prioritizes 'longName', falls back to 'shortName', and finally to the ticker itself.
+    """
     try:
         info = yf.Ticker(ticker).info
-        return info.get('longName', info.get('shortName', ticker))
+        name = info.get('longName', info.get('shortName', ticker))
+        if name and isinstance(name, str):
+            return name
+        else:
+            # This handles cases where the name might be None or not a string
+            logging.warning(f"yfinance returned invalid name for {ticker}. Returning original ticker.")
+            return ticker
     except Exception as e:
-        logging.error(f"yfinance fallback also failed for {ticker}: {e}. Returning original ticker.")
-    return ticker
+        logging.error(f"yfinance lookup failed for {ticker}: {e}. Returning original ticker.")
+        return ticker
 
 # Secure Taipei time fetching with fallback
 def get_taipei_time_str():

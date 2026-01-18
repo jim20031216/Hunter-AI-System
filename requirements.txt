@@ -2,7 +2,6 @@ flask
 yfinance
 pandas
 numpy
-twstock
 pytz
 gunicorn
 tabulate
