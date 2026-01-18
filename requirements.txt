@@ -3,5 +3,4 @@ yfinance
 pandas
 numpy
 pytz
-requests
-curl-cffi
+curl-cffi 

@@ -1,4 +1,4 @@
-# Final Production Code with yfinance's native curl-cffi engine
+# Final Production Code with yfinance's Ticker object and native curl-cffi engine
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -10,6 +10,23 @@ import io
 import logging
 import pytz
 import concurrent.futures
+
+# ================= Bright Data Proxy Setup =================
+# 金鑰資訊已直接植入，準備迎接正式作戰
+PROXY_USERNAME = "brd-customer-hl_a9437f18-zone-residential_proxy1"
+PROXY_PASSWORD = "fi5sx9h4kzl6"
+PROXY_HOST = "brd.superproxy.io"
+PROXY_PORT = 33335
+PROXY_URL = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
+
+# 設定 yfinance 使用我們的秘密通道
+yf.pdr_override() # 這是舊版的方式，新版 yfinance 已不推薦
+# 新版 yfinance/requests-cache 會自動偵測 HTTP_PROXY/HTTPS_PROXY 環境變數
+# 我們在程式啟動時就設定好它
+os.environ['HTTP_PROXY'] = PROXY_URL
+os.environ['HTTPS_PROXY'] = PROXY_URL
+logging.info(">>>>>>[SECRET CHANNEL ESTABLISHED] Proxy environment variables set. AI Hunter is now cloaked.<<<<<<")
+
 
 # ================= Logging Setup =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,12 +41,12 @@ GENE_CACHE_FILE = "src/基因快取.csv"
 
 def get_stock_name(ticker):
     try:
-        # Let yfinance handle the session automatically with curl-cffi
+        # yfinance 會透過我們設定的代理通道來獲取資訊
         info = yf.Ticker(ticker).info
         name = info.get('longName', info.get('shortName', ticker))
         return name if name and isinstance(name, str) else ticker
     except Exception as e:
-        logging.error(f"yfinance name lookup failed for {ticker}: {e}. Returning original ticker.")
+        logging.error(f"yfinance name lookup failed for {ticker} via proxy: {e}. Returning original ticker.")
         return ticker
 
 def get_taipei_time_str():
@@ -60,21 +77,78 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. FINAL Core Engine (Powered by curl-cffi) =================
+# ================= 2. NEW WEAPON: Quick Trend Scan =================
+def quick_trend_scan():
+    """
+    全新的作戰模式：市場趨勢快速掃描
+    1. 低成本抓取全市場日線資料
+    2. 篩選出真正「價量俱揚」的強勢潛力股
+    3. 返回一個精簡後的目標清單
+    """
+    try:
+        logging.info(">>>>>>[QUICK SCAN INITIATED] Launching new quick trend scan weapon...<<<<<<")
+        # 這裡我們需要一個全市場的股票清單，暫時用 market_scan_list.txt 替代
+        # 未來可以擴充成從證交所API獲取完整列表
+        with open(MARKET_SCAN_LIST_FILE, "r", encoding="utf-8") as f:
+            full_market_list = [l.strip() for l in f if l.strip() and not l.startswith("#") and l.strip() != "^TWII"]
+
+        if not full_market_list:
+            return ["2330.TW"] # 如果列表為空，返回一個預設目標
+
+        # 低成本抓取近兩日數據
+        # yf.download 會自動使用我們設定的代理
+        data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True)
+
+        potential_targets = []
+        for ticker in full_market_list:
+            try:
+                df = data[ticker]
+                if len(df) < 2: continue
+
+                last_day = df.iloc[-1]
+                prev_day = df.iloc[-2]
+
+                # 核心篩選邏輯：今日收紅、成交量是昨日1.2倍以上
+                is_red = last_day['Close'] > last_day['Open']
+                is_volume_up = last_day['Volume'] > (prev_day['Volume'] * 1.2)
+
+                if is_red and is_volume_up:
+                    potential_targets.append(ticker)
+            except (KeyError, IndexError):
+                # 某些股票可能沒有足夠的數據，忽略它們
+                continue
+
+        logging.info(f">>>>>>[QUICK SCAN REPORT] Found {len(potential_targets)} potential targets: {potential_targets}<<<<<<")
+        # 如果沒有找到任何目標，至少分析大盤，避免返回空結果
+        return potential_targets if potential_targets else ["^TWII"]
+
+    except Exception as e:
+        logging.error(f"Quick trend scan failed: {e}. Falling back to default list.")
+        # 如果掃描失敗，返回一個安全的預設列表
+        return ["2330.TW", "2454.TW", "3481.TW"]
+
+
+# ================= 3. FINAL Core Engine (Now with Proxy and Quick Scan) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
 
     is_market_scan = mode.startswith('MARKET')
-    list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
     
-    if not is_market_scan and not os.path.exists(WATCHLIST_FILE):
-         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
+    if mode == 'QUICK_SCAN':
+        # 如果是快速掃描模式，目標列表由新武器提供
+        targets = quick_trend_scan()
+        list_file = "動態產生" # 標示來源
+    else:
+        list_file = MARKET_SCAN_LIST_FILE if is_market_scan else WATCHLIST_FILE
+        if not is_market_scan and not os.path.exists(WATCHLIST_FILE):
+             with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write("# 請在此輸入您的自選股")
 
-    with open(list_file, "r", encoding="utf-8") as f:
-        targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-        if not targets: return [], scan_time, analysis_mode
+        with open(list_file, "r", encoding="utf-8") as f:
+            targets = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+
+    if not targets: return [], scan_time, analysis_mode, "無"
 
     try:
         cache_df = pd.read_csv(GENE_CACHE_FILE).set_index('ticker')
@@ -87,10 +161,11 @@ def run_stable_hunter(mode='DAILY'):
     
     def fetch_and_analyze_ticker(ticker):
         try:
-            logging.info(f"THREAD: Fetching data for {ticker} using yfinance's native engine.")
+            logging.info(f"THREAD: Fetching data for {ticker} via proxy.")
             
-            # REMOVED custom session. Let yfinance handle it with curl-cffi.
-            df = yf.download(ticker, period=period, progress=False, auto_adjust=False, timeout=20)
+            ticker_obj = yf.Ticker(ticker)
+            # 所有的網路請求都會自動通過我們設定的代理
+            df = ticker_obj.history(period=period, auto_adjust=False, timeout=20)
             
             if df.empty:
                 raise ValueError("Downloaded DataFrame is empty.")
@@ -98,7 +173,7 @@ def run_stable_hunter(mode='DAILY'):
             if df.empty:
                 raise ValueError("DataFrame is empty after dropping NaNs.")
 
-            # --- Analysis Logic ---
+            # --- Analysis Logic (完全不變) ---
             last = df.iloc[-1]
             last_p = float(last['Close'])
             best_p, fit_val = 20, "N/A"
@@ -177,16 +252,17 @@ def run_stable_hunter(mode='DAILY'):
         updated_cache_df = updated_cache_df[~updated_cache_df.index.duplicated(keep='last')]
         updated_cache_df.to_csv(GENE_CACHE_FILE)
         
-    return results, scan_time, analysis_mode
+    return results, scan_time, analysis_mode, list_file
 
-# ================= 3. Flask Web Routes (Unchanged) =================
+# ================= 4. Flask Web Routes (Updated for New Modes) =================
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/run/<mode>')
 def run_analysis(mode):
-    data, scan_time, analysis_mode = run_stable_hunter(mode=mode.upper())
+    # 將新的快速掃描模式傳遞給核心引擎
+    data, scan_time, analysis_mode, list_file = run_stable_hunter(mode=mode.upper())
     error_flag = any("ERROR" in r.get("sector", "") for r in data)
     
     if mode.upper() == 'MARKET_BACKTEST' and not error_flag:
@@ -205,10 +281,12 @@ def run_analysis(mode):
 
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
+    if mode.upper() == 'QUICK_SCAN':
+        report_info = f"市場趨勢快速掃描完成，發現 {len(data)} 個潛力目標。"
     if error_flag:
-        report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。系統正在從錯誤中學習。 " + report_info
+        report_info = f"偵測到 {sum(1 for r in data if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
 
-    return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time, error_flag=error_flag)
+    return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time, error_flag=error_flag, list_file=list_file)
 
 
 @app.route('/watchlist/select')
@@ -234,7 +312,7 @@ def manage_watchlist():
 
 @app.route('/download/<mode>')
 def download_csv(mode):
-    results, _, _ = run_stable_hunter(mode=mode.upper())
+    results, _, _, _ = run_stable_hunter(mode=mode.upper())
     
     if any("ERROR" in r.get("sector", "") for r in results):
         headers = ["分析狀態", "詳細錯誤"]
