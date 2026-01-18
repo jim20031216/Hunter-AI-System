@@ -66,14 +66,9 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/run/<mode>')
-def run_analysis_route(mode):
+# ================= 2. Core Stock Analysis Engine =================
+def run_stable_hunter(mode='DAILY'):
     init_system_files()
-    mode = mode.upper()
     scan_time = get_taipei_time_str()
 
     is_market_scan = mode.startswith('MARKET')
@@ -95,16 +90,11 @@ def run_analysis_route(mode):
     analysis_mode = 'WEEKLY' if mode in ['MARKET_BACKTEST', 'WEEKLY'] else 'DAILY'
 
     for ticker in targets:
-        time.sleep(2) # Polite delay to prevent getting blocked
+        time.sleep(1) # Polite delay
         try:
-            df = yf.download(ticker, period="60d" if analysis_mode == 'DAILY' else "5y", progress=False, auto_adjust=False, timeout=15, group_by='column')
+            df = yf.download(ticker, period="60d" if analysis_mode == 'DAILY' else "5y", progress=False, auto_adjust=False, timeout=15)
             
-            if df.empty:
-                raise ValueError("yf.download returned an empty DataFrame.")
-
-            expected_cols = {'Open', 'High', 'Low', 'Close', 'Volume'}
-            if not expected_cols.issubset(df.columns):
-                raise KeyError(f"Dataframe missing columns. Expected: {expected_cols}, Found: {list(df.columns)}")
+            if df.empty: raise ValueError("yf.download returned an empty DataFrame.")
 
             last = df.iloc[-1]
             last_p = float(last['Close'])
@@ -113,6 +103,7 @@ def run_analysis_route(mode):
             if analysis_mode == 'WEEKLY':
                 battle = []
                 for p in [10, 20, 60]:
+                    # Strategy calculation...
                     df_strat = df[['Close']].copy()
                     df_strat['ma'] = df_strat['Close'].rolling(p).mean().dropna()
                     df_strat['above_ma'] = (df_strat['Close'] > df_strat['ma']).astype(int)
@@ -123,13 +114,9 @@ def run_analysis_route(mode):
                     if df_strat['above_ma'].iloc[-1] == 1:
                         last_buy_idx = df_strat[df_strat['signal_change'] == 1].index
                         if not last_buy_idx.empty:
-                            last_buy_date = last_buy_idx[-1]
-                            last_sell_date_series = df_strat[df_strat['signal_change'] == -1].index
-                            last_sell_date = last_sell_date_series[-1] if not last_sell_date_series.empty else pd.Timestamp.min
-                            if last_buy_date > last_sell_date:
-                                entry_price_open = df_strat.loc[last_buy_date, 'Close']
-                                exit_price_open = df_strat['Close'].iloc[-1]
-                                if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
+                            entry_price_open = df_strat.loc[last_buy_idx[-1], 'Close']
+                            exit_price_open = df_strat['Close'].iloc[-1]
+                            if entry_price_open != 0: trade_profits_pct.append((exit_price_open - entry_price_open) / entry_price_open - 0.004)
                     current_capital = 100.0 * np.prod([1 + prof for prof in trade_profits_pct])
                     battle.append((p, current_capital))
                 best_p, f_raw = sorted(battle, key=lambda x: x[1], reverse=True)[0]
@@ -155,18 +142,13 @@ def run_analysis_route(mode):
                            "signal": signal, "sector": get_sector_label(ticker)})
         
         except Exception as e:
-            # Point 1: Expose the error to the user interface.
             logging.error(f"CRITICAL ERROR on {ticker} in {mode}: {e}", exc_info=True)
             error_message = str(e)
-            error_result = {
-                "name": f"分析失敗: {ticker}",
-                "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A",
-                "status": f"🔴 錯誤",
-                "signal": f"{e.__class__.__name__}",
-                "order_error": error_message, # Store raw error message
-                "sector": "ERROR"
-            }
-            results.append(error_result)
+            results.append({
+                "name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A",
+                "status": "🔴 錯誤", "signal": f"{e.__class__.__name__}",
+                "order_error": error_message, "sector": "ERROR"
+            })
             continue
     
     if new_cache:
@@ -175,11 +157,23 @@ def run_analysis_route(mode):
         updated_cache_df = combined_df[~combined_df.index.duplicated(keep='last')]
         updated_cache_df.to_csv(GENE_CACHE_FILE)
         logging.info(f"Gene cache updated with {len(new_cache)} entries.")
+        
+    return results, scan_time, analysis_mode
 
-    if mode == 'MARKET_BACKTEST':
+# ================= 3. Flask Web Routes =================
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/run/<mode>')
+def run_analysis(mode):
+    # 1. Run the analysis to get raw data
+    results, scan_time, analysis_mode = run_stable_hunter(mode=mode.upper())
+
+    # 2. Sort and Process data for display
+    if mode.upper() == 'MARKET_BACKTEST':
         results.sort(key=lambda r: float(r['fit'].replace('%', '')) if r.get('fit') and r['fit'] != 'N/A' else -9999, reverse=True)
 
-    # Point 4: Adapt frontend logic for error handling
     buys = [r['sector'] for r in results if r.get('signal') == "🟢🟢 埋伏" and r.get('sector') != "[熱門]" and "ERROR" not in r.get('sector',"")]
     final_table = []
     for r in results:
@@ -191,12 +185,14 @@ def run_analysis_route(mode):
             if r['status'] == "❌弱勢": order = "🔴【避開】趨勢空"
             final_table.append([r['name'], r['p'], r['fit'], r['price'], r['target'], r['status'], r['signal'], order])
 
+    # 3. Prepare display headers and info
     headers = ["標的/族群", "基因", "5年戰績", "現價", "1.382預判", "狀態", "訊號", "👉 獵人作戰指令"]
     report_info = "每週分析完成，基因快取已更新。" if analysis_mode == 'WEEKLY' else ""
     if any(r.get("sector") == "ERROR" for r in results):
-        report_info = f"偵測到 {sum(1 for r in results if r.get('sector') == 'ERROR')} 個分析錯誤。" + report_info
+        report_info = f"偵測到 {sum(1 for r in results if r.get('sector') == 'ERROR')} 個分析錯誤。 " + report_info
 
-    return render_template('results.html', headers=headers, data=final_table, mode=mode, report_info=report_info, scan_time=scan_time)
+    # 4. Render the results page
+    return render_template('results.html', headers=headers, data=final_table, mode=mode.upper(), report_info=report_info, scan_time=scan_time)
 
 @app.route('/watchlist/select')
 def select_watchlist_analysis():
@@ -221,23 +217,7 @@ def manage_watchlist():
     
     return render_template('watchlist.html', content=content, ticker_details=ticker_details)
 
-@app.route('/download/<mode>')
-def download_report(mode):
-    # This is a placeholder. In a real app, you'd generate a CSV.
-    # For now, let's create a dummy CSV string for demonstration.
-    output = io.StringIO()
-    # A proper implementation would fetch the data similar to run_analysis_route
-    # and format it into a CSV.
-    # For now, just a message:
-    output.write("Ticker,Name,Signal\n")
-    output.write("2330.TW,TSMC,HOLD\n")
-    output.write("0050.TW,Yuanta/P-shares Taiwan Top 50 ETF,BUY\n")
-    
-    # Move the pointer to the beginning of the stream
-    output.seek(0)
-    
-    return Response(
-        output,
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment;filename={mode}_report.csv"}
-    )
+# ================= Main Entry Point for Local Server =================
+if __name__ == '__main__':
+    # Note: Use start_server.sh or devserver.sh to run
+    app.run(host='0.0.0.0', port=8081, debug=True)

@@ -5,3 +5,4 @@ numpy
 twstock
 pytz
 gunicorn
+tabulate
