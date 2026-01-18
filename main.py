@@ -1,4 +1,5 @@
-# Final Production Code with yfinance's Ticker object and native curl-cffi engine
+# FINAL CORRECTED CODE - PHOENIX PROTOCOL
+# Trusting yfinance's native curl_cffi engine, providing keys via environment.
 from flask import Flask, render_template, redirect, url_for, Response, request
 import yfinance as yf
 import pandas as pd
@@ -10,23 +11,22 @@ import io
 import logging
 import pytz
 import concurrent.futures
-import requests
 
-# ================= Bright Data Proxy Setup (Hardware-Level) =================
-# 最終解決方案：建立一個專用的、強制使用代理的 requests session
+# ================= Bright Data Proxy Setup (Phoenix Protocol) =================
+# The CORRECT solution, as hinted by the Yahoo API error message.
+# We set the proxy credentials as environment variables.
+# yfinance's internal engine (curl_cffi) will automatically detect and use them.
 PROXY_USERNAME = "brd-customer-hl_a9437f18-zone-residential_proxy1"
 PROXY_PASSWORD = "fi5sx9h4kzl6"
 PROXY_HOST = "brd.superproxy.io"
 PROXY_PORT = 33335
 PROXY_URL = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
 
-# 建立一個全局的、帶有代理設定的 Session 物件
-proxy_session = requests.Session()
-proxy_session.proxies = {
-    "http": PROXY_URL,
-    "https": PROXY_URL
-}
-logging.info(">>>>>[HARDWARE-LEVEL CHANNEL ESTABLISHED] Dedicated proxy session created. AI Hunter is now permanently cloaked.<<<<<")
+os.environ['HTTP_PROXY'] = PROXY_URL
+os.environ['HTTPS_PROXY'] = PROXY_URL
+
+# We REMOVED the faulty requests.Session. We now let yfinance handle everything.
+logging.info(">>>>>[PHOENIX PROTOCOL ACTIVE] Proxy keys delivered to environment. yfinance now has full command.<<<<<")
 
 
 # ================= Logging Setup =================
@@ -43,12 +43,12 @@ GENE_CACHE_FILE = "/tmp/基因快取.csv"
 
 def get_stock_name(ticker):
     try:
-        # 強制使用我們的代理 session
-        info = yf.Ticker(ticker, session=proxy_session).info
+        # NO MORE session=... Let yfinance drive.
+        info = yf.Ticker(ticker).info
         name = info.get('longName', info.get('shortName', ticker))
         return name if name and isinstance(name, str) else ticker
     except Exception as e:
-        logging.error(f"yfinance name lookup failed for {ticker} via proxy: {e}. Returning original ticker.")
+        logging.error(f"yfinance name lookup failed for {ticker}: {e}. Returning original ticker.")
         return ticker
 
 def get_taipei_time_str():
@@ -88,8 +88,8 @@ def quick_trend_scan():
         if not full_market_list:
             return ["2330.TW"]
 
-        # 強制使用我們的代理 session
-        data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True, session=proxy_session)
+        # NO MORE session=... Let yfinance drive.
+        data = yf.download(full_market_list, period="2d", group_by='ticker', auto_adjust=False, threads=True)
 
         potential_targets = []
         for ticker in full_market_list:
@@ -116,7 +116,7 @@ def quick_trend_scan():
         return ["2330.TW", "2454.TW", "3481.TW"]
 
 
-# ================= 3. FINAL Core Engine (Now with Proxy and Quick Scan) =================
+# ================= 3. FINAL Core Engine (Phoenix Protocol) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -148,11 +148,11 @@ def run_stable_hunter(mode='DAILY'):
     
     def fetch_and_analyze_ticker(ticker):
         try:
-            logging.info(f"THREAD: Fetching data for {ticker} via hardware-level proxy.")
+            logging.info(f"THREAD: Fetching data for {ticker} using Phoenix Protocol.")
             
-            # 強制使用我們的代理 session
-            ticker_obj = yf.Ticker(ticker, session=proxy_session)
-            df = ticker_obj.history(period=period, auto_adjust=False, timeout=30) # 增加超時
+            # NO MORE session=... Let yfinance drive.
+            ticker_obj = yf.Ticker(ticker)
+            df = ticker_obj.history(period=period, auto_adjust=False, timeout=30)
             
             if df.empty: raise ValueError("Downloaded DataFrame is empty.")
             df.dropna(inplace=True)
@@ -217,7 +217,7 @@ def run_stable_hunter(mode='DAILY'):
             logging.error(f"THREAD ERROR on {ticker}: {e}", exc_info=True)
             return {"status": "error", "data": {"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"}, "cache": None}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor: # 增加並發數
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         future_to_ticker = {executor.submit(fetch_and_analyze_ticker, ticker): ticker for ticker in targets}
         for future in concurrent.futures.as_completed(future_to_ticker):
             results_agg.append(future.result())
