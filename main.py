@@ -58,7 +58,7 @@ def init_system_files():
     if not os.path.exists(GENE_CACHE_FILE):
         pd.DataFrame(columns=['ticker', 'best_p', 'fit']).to_csv(GENE_CACHE_FILE, index=False)
 
-# ================= 2. Core Stock Analysis Engine (Now with Robust Fallback) =================
+# ================= 2. Core Stock Analysis Engine (Now with Ultimate Fallback) =================
 def run_stable_hunter(mode='DAILY'):
     init_system_files()
     scan_time = get_taipei_time_str()
@@ -80,26 +80,29 @@ def run_stable_hunter(mode='DAILY'):
     except (FileNotFoundError, pd.errors.EmptyDataError):
         cache_df = pd.DataFrame(columns=['ticker', 'best_p', 'fit']).set_index('ticker')
 
-    # --- Data Download Section with Fallback ---
+    # --- Data Download Section with Ultimate Fallback ---
     period = "5y" if analysis_mode == 'WEEKLY' else "60d"
     all_data = None
     try:
         logging.info(f"Attempting FAST batch download for {len(targets)} tickers...")
-        all_data = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=20, group_by='column')
-        # Critical Check: If batch download returns empty for multiple tickers, it's a failure.
-        if all_data.empty and len(targets) > 1:
-             logging.warning("Batch download returned an empty DataFrame. Forcing fallback to individual downloads.")
+        all_data_raw = yf.download(targets, period=period, progress=False, auto_adjust=False, timeout=20, group_by='column')
+        
+        # *** THE ULTIMATE CHECK ***
+        # If the returned DataFrame is empty OR if all 'Close' prices are NaN, it's a total failure.
+        if all_data_raw.empty or (isinstance(all_data_raw['Close'], pd.DataFrame) and all_data_raw['Close'].isna().all().all()):
+             logging.warning("Batch download returned no valid data. Forcing fallback.")
              all_data = None # Force fallback
+        else:
+             all_data = all_data_raw
+
     except Exception as e:
-        logging.warning(f"Batch download failed: {e}. Falling back to ROBUST individual downloads.")
+        logging.warning(f"Batch download raised an exception: {e}. Falling back to ROBUST individual downloads.")
         all_data = None
 
-    # This is the core analysis logic that will be applied to each ticker
     def analyze_ticker(ticker, df):
         nonlocal results, new_cache, cache_df, analysis_mode
         last = df.iloc[-1]
         last_p = float(last['Close'])
-
         best_p, fit_val = 20, "N/A"
         if analysis_mode == 'WEEKLY':
             battle = []
@@ -126,22 +129,18 @@ def run_stable_hunter(mode='DAILY'):
             if ticker in cache_df.index:
                 best_p = int(cache_df.loc[ticker, 'best_p'])
                 fit_val = cache_df.loc[ticker, 'fit']
-
         low_20 = df['Low'].tail(20).min()
         target_1382 = round(low_20 + (last_p - low_20) * 1.382, 2)
         ma_val = df['Close'].rolling(best_p).mean().iloc[-1]
         status = "✅強勢" if last_p > ma_val else "❌弱勢"
         is_red = last_p > last['Open']
         signal = "🟢🟢 埋伏" if (is_red and len(df['Volume']) > 1 and last['Volume'] > df['Volume'].iloc[-2] and status == "✅強勢") else "⚪ 觀察"
-        
         stock_name = get_stock_name(ticker)
         display_name = f"{get_sector_label(ticker)}{stock_name}({ticker.split('.')[0]})"
-        
         results.append({"name": display_name, "p": f"{best_p}d", "fit": fit_val,
                        "price": f"{last_p:.1f}", "target": target_1382, "status": status,
                        "signal": signal, "sector": get_sector_label(ticker)})
 
-    # PATH 1: Fast batch processing
     if all_data is not None:
         logging.info("FAST PATH: Processing all tickers from batch download.")
         for ticker in targets:
@@ -155,7 +154,6 @@ def run_stable_hunter(mode='DAILY'):
                 logging.error(f"CRITICAL ERROR on {ticker} in {mode} (fast path): {e}", exc_info=False)
                 results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
                 continue
-    # PATH 2: Robust individual processing (Fallback)
     else:
         logging.info("ROBUST PATH: Processing tickers individually due to batch failure.")
         for ticker in targets:
@@ -165,7 +163,7 @@ def run_stable_hunter(mode='DAILY'):
                 df = df.dropna()
                 if df.empty: raise ValueError(f"No data for {ticker} after individual download.")
                 analyze_ticker(ticker, df)
-                time.sleep(0.5) # Polite delay to avoid getting blocked
+                time.sleep(0.5)
             except Exception as e:
                 logging.error(f"CRITICAL ERROR on {ticker} in {mode} (robust path): {e}", exc_info=False)
                 results.append({"name": f"分析失敗: {ticker}", "p": "N/A", "fit": "N/A", "price": "N/A", "target": "N/A", "status": "🔴 錯誤", "signal": "Data Error", "order_error": str(e), "sector": "ERROR"})
